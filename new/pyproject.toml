@@ -1,0 +1,10 @@
+[project]
+name = "ca3d"
+version = "0.1.0"
+description = "Cellular-automaton volume generators and a voxel renderer (reconstruction of the raws/ experiments)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "pillow"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
