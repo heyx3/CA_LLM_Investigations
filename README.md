@@ -1,7 +1,13 @@
 ![The Cityscape cellular automata](new/out/gallery/cityscape.png)
 
+![The "fossil waves" cellular automata](new/out/gallery/fossil_waves.png)
+
+![The "hangar" cellular automata](new/out/gallery/hangar.png)
+
 This is my space to task LLM's with doing analysis and renders of 3D cellular automata,
   while I build a proper app elsewhere for humans to toy with the most promising results.
+
+The real project is in the "new" folder. Old garbage stuff is in the "raws" folder and can be safely ignored.
 
 ## Why?
 

@@ -38,7 +38,7 @@ def contact_sheet(paths, out, thumb=300, cols=4):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--res', type=int, default=900)
-    p.add_argument('--out', type=Path, default=Path('out/gallery'))
+    p.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out' / 'gallery')
     p.add_argument('--only', nargs='*', default=None)
     p.add_argument('--saved', action='store_true', help='render the saved rules instead')
     args = p.parse_args()
@@ -61,7 +61,9 @@ def main():
         written.append(path)
         s = metrics.summary(scene.volume)
         print(f'{name:24} {str(scene.volume.shape):>15} {s["density"]:>8.3f} {s["coherence"]:>6.2f} '
-              f'{s["parts"]:>6} {t1 - t0:>6.1f}s {t2 - t1:>6.1f}s', flush=True)
+              f'{s["parts"]:>6} {t1 - t0:>6.1f}s {t2 - t1:>6.1f}s        '
+              f'({path})',
+              flush=True)
 
     if not args.saved and (args.only is None or 'hierarchy_1d' in args.only):
         path = args.out / 'hierarchy_1d.png'
