@@ -1,6 +1,17 @@
 """ca3d: cellular-automaton volume generators and a voxel renderer.
 
-Reconstructed from the exploratory scripts in ../raws.
+Reconstructed from the exploratory scripts in ../raws.  Three sub-packages:
+
+  rulesets   the cellular automata: rule tables, CA engines, rule families, the volume
+             constructions, the cityscape and a catalogue of saved finds
+  analysis   measuring output (metrics) and searching for rules (dynamics, search,
+             influence), plus the original analyses as experiments
+  render3D   the voxel renderer, colouring, and named scenes ready to render
+
+    from ca3d.rulesets import cityscape
+    from ca3d.render3D import render
+    fine = cityscape.make(seed=3).run(160).fine
+    image = render.render(fine)
 
 Conventions shared by every module:
 

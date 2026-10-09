@@ -1,0 +1,227 @@
+[
+  {
+    "name": "fossil_waves",
+    "kind": "deposition",
+    "rule": "",
+    "settings": {
+      "n": 96,
+      "radius": 3,
+      "n_states": 5,
+      "birth": [
+        8,
+        18
+      ],
+      "freeze": 10,
+      "block": 3,
+      "p0": 0.003,
+      "steps": 400,
+      "seed": 1
+    },
+    "measures": {
+      "density": 0.1011,
+      "coherence": 4.1737,
+      "parts": 3434
+    },
+    "found_by": "analysis/experiments.py deposition_sweep (replaying raws/multi3.py's sweep)",
+    "notes": "Concentric wave fossils: frozen deposition in which frozen material blocks new ignition. The handoff notes' result #6 (density 0.10, coherence 4.17, 3,434 parts)."
+  },
+  {
+    "name": "tower_field",
+    "kind": "moore",
+    "rule": "000000010401011600010116011616680001011e011614600116126816686c80167d7ffe7ffefee97ffefe69fef9e9977ffefee9fee9e997dee9e987e997977f",
+    "settings": {
+      "n": 64,
+      "steps": 64,
+      "burn": 40,
+      "p0": 0.5,
+      "init": "coin",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.1677,
+      "change": 0.0042,
+      "anisotropy": 0.0979,
+      "pillars@history": 0.5793
+    },
+    "found_by": "scripts/find_rules.py --space moore --sampler perturb --base B5/S234678 B578/S1235678 --flips 12 --count 200 --init coin --n 64 --steps 64 --band density 0.15 0.85 --band change 0.0005 0.05 --band pillars@history 0.2 0.9 (candidate 3)",
+    "notes": "B5/S234678 with 12 entries flipped: its space-time is a field of towers (pillar fraction 0.58), and the flips make it anisotropic."
+  },
+  {
+    "name": "b11_14_s3_11",
+    "kind": "totalistic3d",
+    "rule": "B11-14/S3-11",
+    "settings": {
+      "n": 40,
+      "steps": 60,
+      "burn": 30,
+      "p0": 0.2,
+      "init": "uniform",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.1838,
+      "change": 0.0386,
+      "coherence": 1.6173,
+      "parts": 3123.0,
+      "largest_part": 0.0495
+    },
+    "found_by": "analysis/experiments.py native3d_census: the only survivor of 3,000 interval rules",
+    "notes": "Native 3D rule: slow, clustered (coherence 1.6) and not percolating; the only survivor of the 3D census. Speckly at 40^3."
+  },
+  {
+    "name": "b4_s2347",
+    "kind": "totalistic",
+    "rule": "B4/S2347",
+    "settings": {
+      "steps": 70,
+      "burn": 40,
+      "p0": 0.5,
+      "init": "uniform",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.1351,
+      "change": 0.0051,
+      "compactness": 0.5226,
+      "damage": 0.0286,
+      "pillars@history": 0.3507
+    },
+    "found_by": "the README search example: density 0.15-0.85, damage 0.02-0.25, change 0.001-0.05, compactness 0.4-0.7",
+    "notes": "Compact, slow and in the complex damage band: the slow-compact family the notes found almost empty (its four rules are all the coarse layers use). A candidate for widening the coarse-layer pool."
+  },
+  {
+    "name": "b46_s0135678",
+    "kind": "totalistic",
+    "rule": "B46/S0135678",
+    "settings": {
+      "steps": 70,
+      "burn": 40,
+      "p0": 0.5,
+      "init": "uniform",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.4236,
+      "change": 0.0315,
+      "compactness": 0.6271,
+      "damage": 0.0598,
+      "pillars@history": 0.6013
+    },
+    "found_by": "the README search example: density 0.15-0.85, damage 0.02-0.25, change 0.001-0.05, compactness 0.4-0.7",
+    "notes": "Compact, slow and in the complex damage band: the slow-compact family the notes found almost empty (its four rules are all the coarse layers use). A candidate for widening the coarse-layer pool."
+  },
+  {
+    "name": "b578_s0134578",
+    "kind": "totalistic",
+    "rule": "B578/S0134578",
+    "settings": {
+      "steps": 70,
+      "burn": 40,
+      "p0": 0.5,
+      "init": "uniform",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.1522,
+      "change": 0.0023,
+      "compactness": 0.416,
+      "damage": 0.0239,
+      "pillars@history": 0.511
+    },
+    "found_by": "analysis/experiments.py rule_census: density 0.15-0.85, damage 0.02-0.25, change 0.001-0.05, compactness 0.4-0.7",
+    "notes": "Compact, slow and in the complex damage band: the slow-compact family the notes found almost empty (its four rules are all the coarse layers use). A candidate for widening the coarse-layer pool."
+  },
+  {
+    "name": "b47_s04567",
+    "kind": "totalistic",
+    "rule": "B47/S04567",
+    "settings": {
+      "steps": 70,
+      "burn": 40,
+      "p0": 0.5,
+      "init": "uniform",
+      "seed": 1,
+      "damage_steps": 60,
+      "damage_burn": 0,
+      "record_from": 0
+    },
+    "measures": {
+      "density": 0.2962,
+      "change": 0.0118,
+      "compactness": 0.4926,
+      "damage": 0.1111,
+      "pillars@history": 0.5664
+    },
+    "found_by": "analysis/experiments.py rule_census: density 0.15-0.85, damage 0.02-0.25, change 0.001-0.05, compactness 0.4-0.7",
+    "notes": "Compact, slow and in the complex damage band: the slow-compact family the notes found almost empty (its four rules are all the coarse layers use). A candidate for widening the coarse-layer pool."
+  },
+  {
+    "name": "cityscape_2_4_2",
+    "kind": "cityscape",
+    "rule": "",
+    "settings": {
+      "plan": [
+        "dead",
+        "dead",
+        "static",
+        "static",
+        "static",
+        "static",
+        "complex",
+        "complex"
+      ],
+      "seed": 3,
+      "n": 160
+    },
+    "measures": {
+      "density": 0.1887,
+      "pillars": 0.4742,
+      "void": 0.8087,
+      "streaks": 0.0251
+    },
+    "found_by": "analysis/experiments.py plan_search",
+    "notes": "The cityscape itself (2 dead / 4 static / 2 complex), for reference; its complex contexts use the rebuilt pool."
+  },
+  {
+    "name": "cityscape_2_5_1",
+    "kind": "cityscape",
+    "rule": "",
+    "settings": {
+      "plan": [
+        "dead",
+        "dead",
+        "static",
+        "static",
+        "static",
+        "static",
+        "static",
+        "complex"
+      ],
+      "seed": 3,
+      "n": 160
+    },
+    "measures": {
+      "density": 0.195,
+      "pillars": 0.4837,
+      "void": 0.8028,
+      "streaks": 0.0303
+    },
+    "found_by": "analysis/experiments.py plan_search (distance 0.034 to the recorded profile)",
+    "notes": "One complex context swapped for static: the nearest run to the recorded cityscape profile."
+  }
+]

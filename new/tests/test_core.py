@@ -2,7 +2,8 @@
 import numpy as np
 import pytest
 
-from ca3d import deposition, hierarchy, lattice_gas, life, render, rules, wolfram
+from ca3d.render3D import render
+from ca3d.rulesets import deposition, hierarchy, lattice_gas, life, rules, wolfram
 
 
 # ---------------------------------------------------------------- 1D rules

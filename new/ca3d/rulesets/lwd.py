@@ -13,6 +13,7 @@ import numpy as np
 from scipy import ndimage
 
 from . import life
+from ..analysis import metrics
 
 # Three live cells that ignite unbounded LWD growth ("ladders" race outward from it).
 THREE_CELL_SEED = [(1, 3), (3, 1), (3, 2)]
@@ -92,16 +93,14 @@ def heightfield_volume(heights, depth=None, thickness=None):
 
 def line_opening(mask, length):
     """Cells belonging to horizontal or vertical runs of at least `length`."""
-    return (ndimage.binary_opening(mask, np.ones((1, length), bool)) |
-            ndimage.binary_opening(mask, np.ones((length, 1), bool)))
+    return metrics.long_runs(mask, length)
 
 
 def thin_linear(mask, length=8, square=4):
     """Long in one axis AND thin in the other: survives a line opening but not a square
     opening.  This is what an LWD ladder is; a plain line opening is satisfied by any
     dense blob."""
-    bulk = ndimage.binary_opening(mask, np.ones((square, square), bool))
-    return line_opening(mask, length) & ~bulk
+    return metrics.thin_linear(mask, length, square)
 
 
 # ---------------------------------------------------------------- LWD / GoL hybrid

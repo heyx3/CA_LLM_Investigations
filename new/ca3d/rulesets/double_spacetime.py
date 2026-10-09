@@ -20,6 +20,9 @@ The interesting part is how slab i's rule relates to the base rule (`rule_sequen
                  that ramps linearly from lam_start to lam_end.  Stood upright this is
                  a stratified terrain.
 
+`siblings` replays the original experiment (raws/sweep.py): two volumes from one
+base grid, seeded from its rows and from its columns.
+
 `cascade` > 0 seeds each cell of slab i+1 from slab i's *last* row with that
 probability.  Full cascade degenerates into monolithic empty/solid slabs (all-0 and
 all-1 rows are absorbing); partial cascade punctuates the texture with them.
@@ -78,6 +81,34 @@ def extrude(rows, rules, radius, steps, cascade=0.0, rng=None):
         vol[i] = sheet.T
         previous_last_row = sheet[-1]
     return vol
+
+
+def xor_mutants(rule, radius, bit_order, count, flips, rng):
+    """The original mutation (raws/sweep.py build): each table is the base rule *number*
+    with `flips` random bits XORed, drawn with replacement, so a repeated bit cancels.
+    Kept to replay that script's draws exactly; rule_sequence('independent') picks
+    distinct entries instead."""
+    base = int(rule, 16) if isinstance(rule, str) else int(rule)
+    size = wolfram.table_size(radius)
+    out = []
+    for _ in range(count):
+        v = base
+        for _ in range(flips):
+            v ^= 1 << int(rng.integers(0, size))
+        out.append(wolfram.rule_table(v, radius, bit_order))
+    return np.array(out)
+
+
+def siblings(rule='360a96f9', radius=2, bit_order='lsb', n=96, depth=None, flips=4, seed=20):
+    """raws/sweep.py build(): two double space-times sharing one base grid G and one
+    set of independently mutated rules.  Sibling A seeds slab i with row i of G (G's
+    state at time i), sibling B with column i (cell i's history).  Returns (G, A, B),
+    A and B bool (n, n, depth)."""
+    depth = n if depth is None else depth
+    base = wolfram.rule_table(rule, radius, bit_order)
+    G = wolfram.spacetime(wolfram.single_cell(n), base, radius, n)
+    rules = xor_mutants(rule, radius, bit_order, n, flips, np.random.default_rng(seed))
+    return G, extrude(G, rules, radius, depth), extrude(G.T, rules, radius, depth)
 
 
 def double_spacetime(rule='360a96f9', radius=2, bit_order='lsb', n=96, mutation='walk',

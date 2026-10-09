@@ -32,6 +32,7 @@ NAMED_RULES = {
     'k5_c': ('e1d2b705', 2, 'lsb'),
     'k7_ga_fail': ('b060ce7a415485e2d002a664105ce550', 3, 'msb'),
     'k7_phi_sync': ('FEB1C6EAB8E0C4DA6484A5AAF410C8A0', 3, 'msb'),
+    'k7_ga_fail_062': ('eca1dce69ff14e70a474ea54206f0412', 3, 'msb'),
 }
 
 

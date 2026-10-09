@@ -1,7 +1,7 @@
 """Large-radius 3D CAs built on box counts: frozen deposition and macro/micro chambers.
 
-`box_sum` counts live cells in an axis-aligned box around every voxel in O(1) per
-voxel whatever the radius (separable running sums), with independent radii per axis.
+`box_sum` efficiently counts live cells in an axis-aligned box around every voxel,
+whatever the radius (separable running sums), with independent radii per axis.
 
 Frozen deposition is a Generations-style CA:
   0 empty, 1 alive (a travelling wavefront), 2..n_states-1 refractory (invisible),
@@ -51,10 +51,15 @@ def _neighbour_counts(field, radii, bleed_p, bleed_axis, rng):
     return inner + adjacent * (rng.random(field.shape) < bleed_p)
 
 
-def frozen_deposition(n=96, radius=3, n_states=5, birth=(9, 20), freeze=11, block=3,
-                      p0=0.002, steps=400, target=0.99, seed=1,
+def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, block=3,
+                      p0=0.003, steps=400, target=0.99, seed=1,
                       bleed=None, bleed_axis=0, saturate=None):
     """Run the deposition CA; returns (states uint8 (n, n, n), steps_run, stop_reason).
+
+    The defaults are the run behind the documented result (solid 0.101, coherence
+    4.17, 3,434 parts; found by replaying raws/multi3.py's sweep).  The seeding must
+    make the birth window reachable: the mean live count in the 7^3 box is 343 * p0,
+    so below p0 ~0.003 nothing nucleates.
 
     radius     int or per-axis (rx, ry, rz) box radii
     birth      (lo, hi) live-neighbour window in which an empty cell ignites

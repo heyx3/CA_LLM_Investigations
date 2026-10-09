@@ -33,7 +33,6 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
-from scipy import ndimage
 
 from . import life, wolfram
 
@@ -303,17 +302,3 @@ def random_states(n, scales, ndim, rng):
     """Fair-coin initial state for every layer (drawn as the originals drew them)."""
     return [rng.integers(0, 2, (n // s,) * ndim).astype(np.uint8) for s in scales]
 
-
-def patchy_state(n, rng, blob_scale=8, fill=0.45, sigma=1.0):
-    """Blobs of solid material with empty space between them.
-
-    A low-resolution noise field is Gaussian-smoothed, thresholded so `fill` of it is
-    on, and upsampled by `blob_scale`.  Dying rules need material to erode and
-    freezing rules need something to lock in; uniform noise engages neither.
-    """
-    small = ndimage.gaussian_filter(rng.random((n // blob_scale,) * 2), sigma)
-    blobs = small > np.quantile(small, 1 - fill)
-    out = np.zeros((n, n), np.uint8)
-    up = upsample(blobs.astype(np.uint8), blob_scale)
-    out[:up.shape[0], :up.shape[1]] = up
-    return out
