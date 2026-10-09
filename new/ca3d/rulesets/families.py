@@ -1,8 +1,9 @@
 """Rule families for the hierarchical CA, and the pools of rules drawn from them.
 
-The cityscape example works because the fine layer does *not* use one interesting rule: each
-of its contexts gets a rule from a different family, and most families are boring on
-purpose.
+The cityscape (see cityscape.py) works because its fine layer does *not* use one
+interesting rule: each of its contexts gets a rule from a different family, and most
+families are boring on purpose.  A family is defined by how a rule behaves when run
+(a pipeline of criteria in FAMILIES), not by its table:
 
   dead     density -> 0 from a dense start      empty sky; carves voids
   static   frozen, mid density, dense start     pillars: a frozen 2D pattern extruded
@@ -11,14 +12,17 @@ purpose.
   edge     partial damage spreading, mid dens.  edge-of-chaos rules (older configs)
   slow     compact *and* slowly changing        the coarse layers' territories
 
-Dead and static rules must be judged from a dense start (p0 = 0.85): they are defined
-by what they do to existing material.
+"Density", "damage spreading", "compactness" and "change" are measures defined in
+analysis/metrics.py and analysis/dynamics.py (see also docs/CONCEPTS.md).  "Dense
+start" means a random soup with 85% of cells alive (p0 = 0.85): dead and static rules
+are defined by what they do to existing material, so a sparse start would not engage
+them.
 
-`build_pools` replays the original pipeline, which survives in raws/pillars.py,
-raws/nontot.py and raws/ablate.py, with the same seeds and the same order of random
-draws.  The dead, static and slow pools should therefore be the original rules.  The
-generator of the complex pool (pool_nt_sparse.npy) is lost, so `complex` and `edge`
-are rebuilt from the documented criteria instead.
+`build_pools` searches for members of each family and perturbs them (expanding each
+B/S rule to 512 entries and flipping a few, see life.py).  All draws use fixed seeds,
+so the pools are reproducible and cached in data/rule_pools.npz.  The `complex` and
+`edge` pools are built from the criteria above rather than from a recorded list of
+rules, so other implementations of those criteria would find different members.
 """
 from pathlib import Path
 
@@ -28,11 +32,12 @@ from . import life
 from ..analysis.dynamics import Assay, Moore, Totalistic
 from ..analysis.search import Band, Criterion, Pipeline, evaluate, perturbations, random_rules
 
-# The entire slow/compact pool found in totalistic space (4 of ~6000 sampled rules),
-# in the order the notes list them as slow[0..3].
+# The entire slow/compact pool found in totalistic space (4 of ~6000 sampled rules).
+# The order matters: seeded draws pick from the pool by position.
 SLOW_SEEDS = ['B356/S5678', 'B037/S245678', 'B5/S234678', 'B578/S1235678']
 
-# Edge-of-chaos rules used for layer 0 in an earlier configuration (render sg_0).
+# Edge-of-chaos rules (partial damage spreading) used for layer 0 in an earlier,
+# purely totalistic configuration (the `hierarchy_sg0` scene).
 EDGE_OF_CHAOS = ['B012458/S134568', 'B15/S012378', 'B05/S0268', 'B3/S245678',
                  'B058/S12458', 'B3456/S2567', 'B458/S24567', 'B06/S15']
 
@@ -43,9 +48,9 @@ LIFE_LIKE = Totalistic()        # 18-entry B/S tables
 MOORE = Moore()                 # 512-entry tables
 
 # How each family's candidates are tested (see dynamics.Assay)
-DENSE = Assay(p0=0.85, burn=45)   # raws/pillars.py tot_profile: dense random() < 0.85 soup
-COIN = Assay(init='coin')         # raws/nontot.py profile: fair-coin soup, burn-in 40
-SMALL = Assay(n=64)               # reconstructed: the scripts behind these pools are lost
+DENSE = Assay(p0=0.85, burn=45)   # dense soup: each cell alive with probability 0.85
+COIN = Assay(init='coin')         # fair-coin soup (p = 0.5), burn-in 40 steps
+SMALL = Assay(n=64)               # small 64x64 lattice: cheap, for the damage-spreading test
 
 FAMILIES = {
     'dead': Pipeline.single([Criterion('density', (None, 0.02))], DENSE),
@@ -75,19 +80,22 @@ def perturbed(tables18, flips, variants, rng):
 
 
 def search_dead_static(n_trials=9000, seed=4):
-    """raws/pillars.py find_families: random B/S rules judged from a dense start.
-    The notes report 156 dead and 71 static for these settings."""
+    """Draw random B/S rules and sort them into the dead and static families, judging
+    all of them from one shared dense start.  Returns {'dead': tables, 'static': tables}
+    (18-entry tables).  With the default settings: 156 dead and 71 static."""
     tables = random_rules(LIFE_LIKE, n_trials, np.random.default_rng(seed), draw='coin')
     values = evaluate(LIFE_LIKE, tables, ['density', 'change'], DENSE)   # one shared run
     return {name: tables[FAMILIES[name].passes(values)] for name in ('dead', 'static')}
 
 
 def slow_pool(flip_counts=(0, 4, 12, 32, 80, 160), variants=60, seed=7, log=print):
-    """raws/nontot.py: perturb each slow seed `variants` times by k flips (a fresh
-    rng(seed) per k), keep those still slow, and stack the survivors of every k.
+    """Expand each slow rule to 512 entries, perturb it `variants` times by k flips
+    (a fresh rng(seed) for every k), keep the variants that are still slow, and stack
+    the survivors of every k.
 
-    k = 0 keeps 60 identical copies of each seed rule, so most of the pool is the four
-    isotropic originals.  Notes: 240, 80, 39, 12, 0 kept for k = 0, 4, 12, 32, 80.
+    k = 0 keeps 60 identical copies of each seed rule, so much of the pool is the four
+    isotropic originals.  Survivors fall as k grows (240, 80, 39, 12 for k = 0, 4, 12,
+    32; none for k = 80 or more): the rules tolerate only mild perturbation.
     """
     seeds = np.array([life.parse_bs(r) for r in SLOW_SEEDS])
     kept = []
@@ -99,8 +107,9 @@ def slow_pool(flip_counts=(0, 4, 12, 32, 80, 160), variants=60, seed=7, log=prin
 
 
 def approximate_complex_pools(n_trials=4000, flips=4, seed=5):
-    """Stand-ins for the lost edge/complex pools: totalistic rules in the partial
-    damage-spreading band, expanded, perturbed and re-checked against each family."""
+    """Build the edge and complex pools from their criteria: totalistic rules in the
+    partial damage-spreading band, expanded to 512 entries, perturbed and re-checked
+    against each family."""
     rng = np.random.default_rng(seed)
     tables = random_rules(LIFE_LIKE, n_trials, rng)
     edge18 = np.concatenate([tables[select('edge', tables)],
@@ -113,11 +122,12 @@ def approximate_complex_pools(n_trials=4000, flips=4, seed=5):
 
 
 def build_pools(verbose=True):
-    """Each pool is an (N, 512) uint8 array of non-totalistic rules."""
+    """Build every family's pool: {name: (N, 512) uint8 array of non-totalistic rules}.
+    Takes a couple of minutes; `load_pools` caches the result."""
     log = print if verbose else (lambda *a, **k: None)
     found = search_dead_static()
     log(f'totalistic search: {len(found["dead"])} dead, {len(found["static"])} static')
-    rng = np.random.default_rng(1)          # raws/ablate.py _to_nt: first 40, 3 x 4 flips
+    rng = np.random.default_rng(1)          # first 40 of each family, 3 variants of 4 flips
     pools = {'dead': perturbed(found['dead'][:40], 4, 3, rng),
              'static': perturbed(found['static'][:40], 4, 3, rng),
              'slow': slow_pool(log=log)}

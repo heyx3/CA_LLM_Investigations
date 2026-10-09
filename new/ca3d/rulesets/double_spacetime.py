@@ -1,12 +1,18 @@
 """Double space-time: extrude a 1D CA into 3D using a different rule per slab.
 
-1. Run a base 1D rule from a single live cell to get an n x n space-time diagram G.
-2. Use each row G[i] as the initial condition of a *second* 1D run, with a rule
-   derived from the base rule, giving one 2D sheet per row.
-3. Stack the sheets: vol[i, x, t] = sheet_i[t, x].  Axis 2 (z, up) is the second
-   run's time.
+A 1D CA draws a 2D picture (its space-time diagram: one row per time step).  Here the
+picture is used as the starting point for more 1D runs, which stack into a volume:
 
-The interesting part is how slab i's rule relates to the base rule (`rule_sequence`):
+1. Run a base 1D rule from a single live cell to get an n x n space-time diagram G
+   (row i of G is the ring's state at time i).
+2. Use each row G[i] as the initial condition of a *second* 1D run, with a rule
+   derived from the base rule, giving one 2D sheet (a "slab") per row.
+3. Stack the sheets: vol[i, x, t] = sheet_i[t, x].  Axis 0 is the slab index (the
+   base run's time), axis 1 is position along the ring, and axis 2 (z, up) is the
+   second run's time.
+
+The interesting part is how slab i's rule relates to the base rule (`rule_sequence`).
+"Lambda" is the fraction of 1s in a rule table (see rules.py):
 
   'fixed'        every slab uses the base rule
   'independent'  each slab flips `flips` bits of the base rule.  Neighbouring slabs
@@ -20,12 +26,13 @@ The interesting part is how slab i's rule relates to the base rule (`rule_sequen
                  that ramps linearly from lam_start to lam_end.  Stood upright this is
                  a stratified terrain.
 
-`siblings` replays the original experiment (raws/sweep.py): two volumes from one
-base grid, seeded from its rows and from its columns.
+`siblings` builds two such volumes from one base grid, seeded from its rows and from
+its columns.
 
 `cascade` > 0 seeds each cell of slab i+1 from slab i's *last* row with that
-probability.  Full cascade degenerates into monolithic empty/solid slabs (all-0 and
-all-1 rows are absorbing); partial cascade punctuates the texture with them.
+probability, instead of from the base grid.  Full cascade degenerates into
+monolithic empty/solid slabs (all-0 and all-1 rows never change, so once a slab
+reaches one it stays there); partial cascade punctuates the texture with them.
 """
 import numpy as np
 
@@ -84,10 +91,9 @@ def extrude(rows, rules, radius, steps, cascade=0.0, rng=None):
 
 
 def xor_mutants(rule, radius, bit_order, count, flips, rng):
-    """The original mutation (raws/sweep.py build): each table is the base rule *number*
-    with `flips` random bits XORed, drawn with replacement, so a repeated bit cancels.
-    Kept to replay that script's draws exactly; rule_sequence('independent') picks
-    distinct entries instead."""
+    """`count` mutated copies of a base rule: each is the base rule *number* with
+    `flips` random bits XORed.  Bits are drawn with replacement, so a bit drawn twice
+    cancels itself; rule_sequence('independent') picks distinct entries instead."""
     base = int(rule, 16) if isinstance(rule, str) else int(rule)
     size = wolfram.table_size(radius)
     out = []
@@ -100,10 +106,10 @@ def xor_mutants(rule, radius, bit_order, count, flips, rng):
 
 
 def siblings(rule='360a96f9', radius=2, bit_order='lsb', n=96, depth=None, flips=4, seed=20):
-    """raws/sweep.py build(): two double space-times sharing one base grid G and one
-    set of independently mutated rules.  Sibling A seeds slab i with row i of G (G's
-    state at time i), sibling B with column i (cell i's history).  Returns (G, A, B),
-    A and B bool (n, n, depth)."""
+    """Two double space-times sharing one base grid G and one set of independently
+    mutated rules (`xor_mutants`).  Sibling A seeds slab i with row i of G (G's state at
+    time i), sibling B with column i (cell i's history).  Returns (G, A, B), A and B
+    bool (n, n, depth)."""
     depth = n if depth is None else depth
     base = wolfram.rule_table(rule, radius, bit_order)
     G = wolfram.spacetime(wolfram.single_cell(n), base, radius, n)
@@ -113,7 +119,14 @@ def siblings(rule='360a96f9', radius=2, bit_order='lsb', n=96, depth=None, flips
 
 def double_spacetime(rule='360a96f9', radius=2, bit_order='lsb', n=96, mutation='walk',
                      flips=1, cascade=0.0, seed=20, **sequence_kw):
-    """The whole construction; returns bool (n, n, n) indexed [base time, x, time]."""
+    """The whole construction; returns bool (n, n, n) indexed [slab (base time), x, time].
+
+    rule, radius, bit_order  the base 1D rule (see wolfram.py)
+    mutation                 how slab rules derive from it (see the module docstring)
+    flips                    bits changed per mutation step
+    cascade                  probability a slab is seeded from the previous slab's end
+    sequence_kw              extra arguments for `rule_sequence` (p_one, band, ...)
+    """
     rng = np.random.default_rng(seed)
     base = wolfram.rule_table(rule, radius, bit_order)
     rows = wolfram.spacetime(wolfram.single_cell(n), base, radius, n)

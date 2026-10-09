@@ -11,14 +11,19 @@ of candidate rules advance together in one numpy call:
                                exact arrangement of the 8 neighbours)
 
 An Assay fixes how every rule is tested: lattice size, starting soup, run length,
-burn-in.  Every rule sees the *same* soup, so differences come from the rules, not
-from the draw.  The choice of soup matters: rules that erode or freeze material are
-only engaged by a dense start (p0 = 0.85), and a soup too sparse to reach a rule's
-birth threshold makes every rule look dead.
+burn-in.  A "soup" is a random initial state (each cell alive with probability p0),
+and "burn-in" is the number of initial steps ignored before the change rate is
+averaged, so that start-up transients do not count.  Every rule sees the *same* soup,
+so differences come from the rules, not from the draw.  The choice of soup matters:
+rules that erode or freeze material are only engaged by a dense start (p0 = 0.85),
+and a soup too sparse to reach a rule's birth threshold makes every rule look dead.
 
 `Assay.run` returns a Trajectory (final states, change rate, optionally the whole
 space-time record with time on the last axis); `Assay.damage` runs the damage-
-spreading test.  The measures in `metrics` then apply to either.
+spreading test, which flips one cell and watches how far the difference spreads
+(~0: ordered, ~0.5: chaotic, in between: "complex").  The measures in `metrics` then
+apply to either.  Rules are classified into regimes by exactly these measures (see
+docs/CONCEPTS.md).
 """
 import re
 from dataclasses import dataclass, field
@@ -34,7 +39,11 @@ from .metrics import box3_sum
 # ---------------------------------------------------------------- rule spaces
 
 class RuleSpace:
-    """A family of binary CAs indexed by a rule table of `size` entries."""
+    """A family of binary CAs indexed by a rule table of `size` entries.
+
+    Subclasses define how a batch of lattices advances (`step`), and how a table is
+    written for people (`describe`).  `ndim` is the lattice dimension.
+    """
     name = 'rules'
     ndim = 2                # lattice dimension
     size = 0                # table entries
@@ -53,12 +62,15 @@ class RuleSpace:
         return (rng.random((count, self.size)) < p_one).astype(np.uint8)
 
     def coin(self, count, rng):
-        """`count` random tables drawn as fair integers (the other draw the scripts used)."""
+        """`count` random tables drawn with rng.integers (a fair coin per entry).  Same
+        distribution as `random(p_one=0.5)` but a different use of the generator, so a
+        given seed gives different tables."""
         return rng.integers(0, 2, (count, self.size)).astype(np.uint8)
 
 
 @dataclass(frozen=True)
 class Wolfram(RuleSpace):
+    """1D binary rules of the given radius (see rulesets/wolfram.py)."""
     radius: int = 1
     bit_order: str = 'lsb'
     name = 'wolfram'
@@ -107,6 +119,8 @@ class Totalistic(RuleSpace):
         return {1: 256, 2: 96}.get(self.ndim, 32)
 
     def step(self, states, tables):
+        """One update of a batch of lattices.  The table index is own state times
+        (K + 1) plus the live-neighbour count, K being the neighbourhood size."""
         states = np.asarray(states, np.uint8)
         if self.ndim == 2 and self.radius == 1:          # the fast life.py path
             return life.step_totalistic(states, tables)
@@ -168,7 +182,8 @@ def _counts(text, single_digits):
 
 @dataclass(frozen=True)
 class Moore(RuleSpace):
-    """2D non-totalistic rules (life.py's 512-entry layout)."""
+    """2D non-totalistic rules (life.py's 512-entry layout): the output depends on the
+    exact arrangement of the 3x3 block, so rules may be anisotropic."""
     name = 'moore'
     ndim = 2
     size = 512
@@ -213,6 +228,7 @@ def space_for(tables):
 
 @dataclass
 class Trajectory:
+    """What an Assay run produces for a batch of B rules."""
     final: np.ndarray                 # (B, *lattice) uint8: state after the last step
     change: np.ndarray                # (B,) mean fraction of cells flipping, steps >= burn
     history: np.ndarray | None = None  # (B, *lattice, T) bool, time last; frame t = before step t
@@ -227,9 +243,9 @@ class Assay:
     p0, init     the soup: 'uniform' is random() < p0; 'coin' a fair integers draw
     seed         the soup's seed (one soup shared by every rule)
     damage_steps run length of the damage-spreading test
-    damage_burn  steps run before the damage test flips its cell (0, the original
-                 protocol, flips a soup cell; a burn-in tests the rule's own regime,
-                 since a harsh first step can absorb any perturbation of the soup)
+    damage_burn  steps run before the damage test flips its cell (0 flips a cell of
+                 the soup itself; a burn-in tests the rule's own regime instead, since
+                 a harsh first step can absorb any perturbation of the soup)
     record_from  first step kept in the space-time record, when one is recorded
     """
     n: int | None = None
@@ -259,6 +275,9 @@ class Assay:
         return np.broadcast_to(soup, (len(tables),) + soup.shape).copy()
 
     def run(self, space, tables, record=False):
+        """Run every table in `tables` (B, size) from the shared soup for `steps`
+        steps.  With record=True the space-time history is kept as well (memory:
+        B x lattice x steps)."""
         tables = np.atleast_2d(tables)
         s = self._start(space, tables)
         axes = tuple(range(1, s.ndim))

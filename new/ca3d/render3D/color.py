@@ -5,12 +5,14 @@ import colorsys
 import numpy as np
 from scipy import ndimage
 
-# The original renderer's height ramp: slate blue at the bottom, amber at the top.
+# Default height ramp: slate blue at the bottom, amber at the top.  A ramp is a list of
+# (position in [0, 1], (r, g, b) with channels in [0, 1]) stops.
 DEFAULT_RAMP = [(0.0, (0.30, 0.42, 0.72)), (1.0, (0.95, 0.62, 0.26))]
 
 
 def ramp(values, stops=DEFAULT_RAMP):
-    """Piecewise-linear colour ramp.  stops: [(position, (r, g, b)), ...] sorted."""
+    """Piecewise-linear colour ramp: values in [0, 1] -> (..., 3) RGB floats in [0, 1].
+    stops: [(position, (r, g, b)), ...] sorted by position."""
     values = np.clip(np.asarray(values, np.float64), 0, 1)
     pos = np.array([p for p, _ in stops])
     rgb = np.array([c for _, c in stops], np.float64)

@@ -1,5 +1,10 @@
 """Orthographic voxel renderer: a vectorised Amanatides-Woo DDA in numpy.
 
+A voxel is a cell of the 3D occupancy grid.  To find what a ray (a line of sight)
+hits, the DDA (digital differential analyser) walks it from voxel to voxel: at each
+step it crosses whichever of the three voxel boundaries (x, y or z) comes next along
+the ray, and stops at the first solid voxel.
+
 Every ray in a batch is marched through the occupancy grid at once.  The camera is
 orthographic, so all primary rays share one direction and differ only in origin;
 shadow rays toward a directional light also share one direction.  `trace` therefore
@@ -21,6 +26,7 @@ from .color import DEFAULT_RAMP, ramp as apply_ramp
 
 @dataclass
 class Camera:
+    """Image size and viewpoint.  Orthographic: no perspective, parallel rays."""
     width: int = 900
     height: int = 900
     view_dir: tuple = (-1.0, -1.0, -1.0)    # direction the camera looks (isometric)
@@ -30,6 +36,9 @@ class Camera:
 
 @dataclass
 class Lighting:
+    """Light directions and strengths.  The key light casts shadows; the fill light
+    does not.  `floor` is the ambient level every surface gets, and `gamma` converts
+    the linear brightness to display values."""
     key_dir: tuple = (0.55, 0.30, 0.78)     # toward the key light, which casts shadows
     fill_dir: tuple = (-0.35, -0.55, 0.76)  # toward the shadowless fill light
     floor: float = 0.13
@@ -42,6 +51,7 @@ class Lighting:
 
 @dataclass
 class Hits:
+    """Result of tracing N rays (see `trace`)."""
     hit: np.ndarray       # (N,) bool
     voxel: np.ndarray     # (N, 3) int: the solid voxel struck (zeros where no hit)
     normal: np.ndarray    # (N, 3) outward normal of the face struck
@@ -193,13 +203,17 @@ def render(occ, attr=None, palette=None, camera=None, lighting=None, ramp=DEFAUL
     return (image.reshape(camera.height, camera.width, 3) * 255).astype(np.uint8)
 
 
-def cut_octant(occ, size):
+def cut_octant(occ, size=None):
     """Copy of `occ` with the corner block nearest the default camera removed, exposing
-    three interior faces of a volume too dense to see into."""
+    three interior faces of a volume too dense to see into.  `size` is the block's edge
+    in voxels; by default 11/24 of the volume's edge (a bit under half)."""
     out = np.array(occ, bool, copy=True)
+    if size is None:
+        size = out.shape[0] * 11 // 24
     out[-size:, -size:, -size:] = False
     return out
 
 
 def save_png(image, path):
+    """Write an (H, W, 3) uint8 image to a PNG file."""
     Image.fromarray(image).save(path)

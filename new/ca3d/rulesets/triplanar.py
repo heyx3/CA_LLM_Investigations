@@ -1,9 +1,11 @@
 """Tri-planar volumes: three 1D space-time sheets combined into a 3D volume.
 
-Sheet A is laid on the (x, y) plane, B on (y, z) and C on (z, x); each voxel reads
-one cell from each sheet and a boolean combiner decides whether it is solid.  Only
-3 n^2 cells of CA work produce an n^3 volume, but the result is a texture rather than
-a scene: correlation length is ~1 along every axis.
+A sheet is a 1D CA's space-time diagram (an n x n bool image: time down, position
+across).  Sheet A is laid on the (x, y) plane, B on (y, z) and C on (z, x); each voxel
+reads one cell from each sheet and a boolean combiner (see COMBINERS) decides whether
+it is solid.  Only 3 n^2 cells of CA work produce an n^3 volume, but the result is a
+texture rather than a scene: the correlation length (how far you must move before
+cells stop resembling their neighbours) is ~1 along every axis.
 """
 import numpy as np
 
@@ -11,6 +13,8 @@ from . import wolfram
 
 DEFAULT_RULES = ('360a96f9', '1a5f3c2e', '6cd93a17')
 
+# how = name -> fn(a, b, c, s): bool volume, where a, b, c are the three sheets' cells
+# (0/1) at each voxel and s = a + b + c is how many of them are alive.
 COMBINERS = {
     'and3': lambda a, b, c, s: s == 3,
     'maj': lambda a, b, c, s: s >= 2,
@@ -48,5 +52,7 @@ def combine(a, b, c, how='maj', shear_amount=0):
 
 
 def triplanar(rules=DEFAULT_RULES, radius=2, n=96, how='maj', shear_amount=0, init='single'):
+    """The whole construction: one sheet per rule in `rules`, combined by `how`.
+    Returns bool (n, n, n) indexed [x, y, z]."""
     sheets = [sheet(r, radius, n, init=init, seed=i) for i, r in enumerate(rules)]
     return combine(*sheets, how=how, shear_amount=shear_amount)

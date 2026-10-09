@@ -30,7 +30,12 @@ and ranks against a Target profile:
                          seeds=(3, 7, 11), measures=('density', 'pillars', 'void'))
     table.aggregate('plan').rank(search.Target({'density': 0.196, 'pillars': 0.46}))
 
-Rules of thumb from the notes (raws/"Quantifying Cellular Automaton Output.md"):
+Vocabulary.  A *band* is an interval of a measure's values (e.g. density between
+0.15 and 0.85); a *criterion* is a measure plus a band; a *stage* applies criteria
+under one Assay (how the rules are run); a *pipeline* chains stages.  A *Target* is a
+profile of measured values to get close to.  See docs/CONCEPTS.md for the measures.
+
+Rules of thumb that shaped this design:
 * interesting output lives in a band, never at the extreme of a measure;
 * pair a band on one measure with an independent second measure;
 * if you have an output you like, target its profile rather than maximising anything;
@@ -124,9 +129,9 @@ def rule_measure(trial, name, on='final', **params):
         else:
             raise ValueError(f"on must be 'final' or 'history', not {on!r}")
         if params:
-            producer = name if name in metrics.MEASURES else metrics._PRODUCERS[name]
+            producer = name if name in metrics.MEASURES else metrics.PRODUCERS[name]
             fn = metrics.MEASURES[producer].fn
-            return np.asarray(metrics._per_sample(lambda s: fn(s, **params), X, dims), np.float64)
+            return np.asarray(metrics.per_sample(lambda s: fn(s, **params), X, dims), np.float64)
         return np.asarray(metrics.measure(X, [name], dims=dims)[name], np.float64)
 
     return trial.cached(key, compute)
@@ -176,6 +181,8 @@ class Stage:
 
 @dataclass
 class SearchResult:
+    """The outcome of `Pipeline.run`: every candidate, which passed, and what was
+    measured along the way."""
     space: object
     tables: np.ndarray            # every candidate
     passed: np.ndarray            # (N,) bool
@@ -213,7 +220,8 @@ class SearchResult:
 
 @dataclass
 class Pipeline:
-    """Stages applied in sequence: the staged filter of the notes, cheapest first."""
+    """Stages applied in sequence, cheapest first: each stage only sees the rules that
+    survived the stages before it, so expensive measures run on few candidates."""
     stages: list
 
     @classmethod
@@ -221,6 +229,8 @@ class Pipeline:
         return cls([Stage(list(criteria), assay or Assay(), **kw)])
 
     def run(self, space, tables, log=None):
+        """Run `tables` (N, size) of `space` through every stage; returns a SearchResult.
+        `log`, if given, is called with a progress line after each stage."""
         tables = np.atleast_2d(np.asarray(tables, np.uint8))
         n = len(tables)
         alive = np.arange(n)
@@ -252,7 +262,7 @@ class Pipeline:
         return SearchResult(space, tables, passed, values, funnel)
 
     def select(self, space, tables):
-        """Boolean mask of the tables that pass every stage."""
+        """Boolean mask (N,) of the tables that pass every stage."""
         return self.run(space, tables).passed
 
     @property
@@ -287,8 +297,9 @@ def evaluate(space, tables, names, assay=None, on='final', chunk=256):
 # ---------------------------------------------------------------- candidate generators
 
 def random_rules(space, count, rng, p_one=0.5, draw='uniform'):
-    """Uniformly random tables.  draw='coin' uses rng.integers (the pillars.py draw),
-    'uniform' rng.random() < p_one.  Most of any large space is chaotic."""
+    """Uniformly random tables.  draw='coin' uses rng.integers (a fair coin per
+    entry), 'uniform' uses rng.random() < p_one.  The two give different tables for the
+    same seed.  Most of any large rule space is chaotic, so expect low hit rates."""
     return space.coin(count, rng) if draw == 'coin' else space.random(count, rng, p_one)
 
 
@@ -320,8 +331,9 @@ def interval_rules(space, count, rng, max_width=None):
 def perturbations(bases, flips, variants, rng, expand=None):
     """Expand and perturb: each base table (optionally passed through `expand`, e.g.
     Moore().expand for B/S rules) copied `variants` times with `flips` distinct entries
-    inverted.  Perturbation strength is a dial with a ceiling: structure held to 32
-    flips of the slow rules and died past 80."""
+    inverted.  Perturbation strength is a dial with a ceiling: with too many flips a
+    rule loses the behaviour it was chosen for (for the slow rules, at about 80 of
+    512 entries)."""
     bases = np.atleast_2d(bases)
     if expand is not None:
         bases = expand(bases)

@@ -1,9 +1,9 @@
-"""Regression tests against numbers recorded by the original experiments.
+"""Regression tests against numbers recorded earlier for the cityscape.
 
-They pin the parts of the cityscape that are reproduced exactly: the rule pools
-(raws/pillars.py, nontot.py, ablate.py), the table and state draws of the seed-3
-cityscape, and the density-ladder rotation timings from the original chat.  The
-first run builds data/rule_pools.npz (a couple of minutes); later runs take seconds.
+They pin the rule pools, the table and state draws of the seed-3 cityscape, and the
+density-ladder rotation timings, so any change to the code that alters these results
+is noticed.  The first run builds data/rule_pools.npz (a couple of minutes); later
+runs take seconds.
 """
 import numpy as np
 import pytest

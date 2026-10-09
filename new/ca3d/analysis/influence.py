@@ -9,13 +9,14 @@ identical rules and states and only the intervention differs.
                       it also changes the layer's statistics, so a nonzero result
                       confirms influence without quantifying it.
   perturb_layers      Flip one cell of each layer at t = 0 and measure how far the
-                      difference spreads into the fine layer.  0.000 is a severed
-                      channel; 0.012-0.128 was a live one.
+                      difference spreads into the fine layer.  0.000 means the channel
+                      is severed; values around 0.01-0.1 mean it is live.
   pattern_traffic     How often each (context, neighbourhood pattern) is actually used.
   parent_sensitivity  Per parent bit, the fraction of rule entries whose output depends
                       on it: uniformly over entries, or weighted by traffic.  Dynamics
-                      visit few patterns (three carried 99% of the traffic once), so the
-                      two can disagree wildly: uniform 0.62, effective 0.008.
+                      often visit only a few patterns, so the two can disagree wildly:
+                      a rule table can differ between contexts in 60% of its entries
+                      yet almost never at the entries that are actually used.
   xor_coupled         Rule banks built so each parent bit inverts the output on chosen
                       patterns: effective sensitivity 1.0 whatever the traffic.
 
@@ -36,7 +37,8 @@ def _difference(a, b):
 
 def pin_layers(make, steps, layers=None):
     """Rows {layer, differs, density}: the fraction of fine space-time voxels that
-    change when `layer` never updates, and the fine density of that run."""
+    change when `layer` never updates (is "pinned" at its initial state), and the fine
+    density of that run.  The first row, layer 'none', is the unpinned baseline."""
     base = make().run(steps).fine
     rows = [{'layer': 'none', 'differs': 0.0, 'density': float(base.mean())}]
     ca = make()

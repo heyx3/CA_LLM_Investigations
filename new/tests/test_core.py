@@ -67,7 +67,7 @@ def test_glider_translates():
 @pytest.mark.parametrize('mirror', (False, True))
 def test_rule_transform_equals_lattice_transform(turns, mirror):
     """Transformed rule on the original lattice == original rule on the transformed
-    lattice, transformed back (the check from raws/rotate.py, for all of D4)."""
+    lattice, transformed back (for all 8 rotations and mirror images of the square)."""
     rng = np.random.default_rng(3)
     table = (rng.random(512) < 0.5).astype(np.uint8)
     s = (rng.random((32, 32)) < 0.5).astype(np.uint8)
@@ -151,7 +151,7 @@ def test_density_ladder_orientation_follows_density_level():
 
 def test_density_ladder_events_land_on_coarse_updates():
     """Only the coarsest layer changes its density, and it fires at t = 3 mod 8, so every
-    rotation is seen at t = 4 mod 8 (as in the original runs: 12, 20, 28, 36, ...)."""
+    rotation is seen at t = 4 mod 8 (so: 12, 20, 28, 36, ...)."""
     rng = np.random.default_rng(11)
     ca = _random_hierarchy(rng, n=64, n_layers=4,
                            rotation=hierarchy.RotateOnDensityLadder(delta=0.01))
@@ -221,7 +221,7 @@ def test_shadows_land_under_the_block_and_follow_the_light():
     beside = np.array([[2.5, 2.5, 1.001]])
     assert render.trace(occ, under, (0, 0, 1)).hit[0]
     assert not render.trace(occ, beside, (0, 0, 1)).hit[0]
-    # coverage must respond to the light direction (the original bug gave 1.0% for both)
+    # coverage must respond to the light direction (a shadow bug once gave 1.0% for both)
     cam = render.Camera(width=96, height=96)
 
     def coverage(key):

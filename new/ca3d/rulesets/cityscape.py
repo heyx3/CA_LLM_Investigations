@@ -1,9 +1,12 @@
 """The cityscape: the hierarchical CA configuration behind the best render, its context
-plans, and the profile recorded for it.
+plans, and the profile measured for it.
 
-Four layers at scales 1, 2, 4, 8.  The fine layer gives each of its 8 contexts a rule
-from a family (`PLAN`: 2 dead, 4 static, 2 complex); the coarse layers draw rules from
-the slow pool; layer 0 starts from patchy blobs.  Seed 3 is the documented one.
+Four layers at scales 1, 2, 4, 8 (see hierarchy.py).  The three coarse layers give the
+fine layer 2**3 = 8 contexts.  The fine layer gives each context a rule from a family
+(`PLAN`: 2 dead, 4 static, 2 complex; see families.py): where the coarse layers say
+"dead" the fine layer empties, where they say "static" it freezes into pillars, where
+they say "complex" it grows texture.  The coarse layers draw their own rules from the
+slow pool, and layer 0 starts from patchy blobs.  Seed 3 is the reference cityscape.
 """
 import numpy as np
 
@@ -11,15 +14,18 @@ from . import families, hierarchy, initial
 
 PLAN = ['dead', 'dead', 'static', 'static', 'static', 'static', 'complex', 'complex']
 
-# The plan-ratio variants of the notes (dead / static / complex counts).  Only 2/4/2's
-# context order is recorded; the others put the families in that same order.
+# Plans named by their dead / static / complex counts.  Each lists the families in
+# that order (all dead contexts first, then static, then complex).
 PLANS = {
     '2/4/2': PLAN,
     '4/2/2': ['dead'] * 4 + ['static'] * 2 + ['complex'] * 2,
     '3/2/3': ['dead'] * 3 + ['static'] * 2 + ['complex'] * 3,
 }
 
-# What the seed-3 cityscape measured (160^3): a target profile for searches
+# What the seed-3 cityscape measures (160^3): a target profile for searches.
+# Keys are metrics.MEASURES names: density (live fraction), pillars (share of live
+# cells in long unchanging vertical runs), void (largest empty region as a share of
+# the volume) and streaks (share of live cells in horizontal streaks).
 PROFILE = {'density': 0.196, 'pillars': 0.46, 'void': 0.802, 'streaks': 0.029}
 
 
@@ -34,19 +40,20 @@ def make(seed=3, n=160, plan=PLAN, scales=(1, 2, 4, 8), rotation=None, pools=Non
     """The cityscape as a HierarchicalCA: fine-layer contexts drawn from the families
     in `plan`, coarse layers from the slow pool, patchy blobs as layer 0's start.
 
-    Random draws replay the original script (raws/pillars.py build_mixed) so a seed
-    picks the same tables it did there: the rule tables, the coarse initial states and
-    the blobs each come from their own generator seeded with `seed`, and every layer,
-    layer 0 included, first draws coarse tables, layer 0's then being replaced by the
-    plan.  `ic_seed` (default: `seed`) varies the initial condition under the same rules.
+    seed        picks the rule tables (and, unless `ic_seed` is given, the initial
+                states).  The same seed always gives the same cityscape.
+    ic_seed     varies the initial condition while keeping the rules fixed.
+    start       start(n, rng) makes layer 0's initial state (any generator from
+                rulesets.initial).  On its own this barely matters: the coarse layers
+                decide what grows where, so every start gives the same statistics.
+    coarse_start  also starts the coarse layers from a pattern, drawn at fine
+                resolution and block-averaged to each layer's scale (default: fair
+                coin flips).  This is what actually shapes the city (see the
+                initial_conditions experiment).
 
-    `start(n, rng)` makes layer 0's initial state (any rulesets.initial generator).  On
-    its own it barely matters: the coarse layers decide what grows where, so every start
-    gives the same statistics (raws/seeds.py's comparison, which changed only layer 0).
-    `coarse_start` also starts the coarse layers from a pattern, drawn at fine
-    resolution and block-averaged to each layer's scale (default: fair coin flips, as
-    the original drew them).  That is what shapes the city (experiment
-    initial_conditions).
+    Implementation note: the random draws are made in a fixed order (every layer,
+    layer 0 included, first draws coarse tables, and layer 0's are then replaced by
+    the plan) so that existing seeds keep selecting the same rules.
     """
     pools = families.load_pools() if pools is None else pools
     rng = np.random.default_rng(seed)

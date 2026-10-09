@@ -17,8 +17,8 @@ Kinds and how `rule` is written:
   wolfram       hex rule number (settings: radius, bit_order)
   totalistic    B/S notation, 2D life-like ('B4/S2347')
   totalistic3d  B/S notation with ranges ('B11-14/S3-11'), 26-cell box
-  moore         the 512-entry table as 128 hex digits (np.packbits order); the notes
-                give its nearest B/S rule
+  moore         the 512-entry table as 128 hex digits (np.packbits order); the entry's
+                `notes` give its nearest B/S rule
   deposition    no rule string: settings are rulesets.deposition.frozen_deposition's
   cityscape     no rule string: settings are a plan and a seed for cityscape.make
 
@@ -42,6 +42,9 @@ ASSAY_FIELDS = ('n', 'steps', 'burn', 'p0', 'init', 'seed', 'damage_steps', 'dam
 
 @dataclass
 class Saved:
+    """One catalogue entry.  `settings` holds what the rule needs to be rerun the way it
+    was found (radius, bit order, Assay fields...), `measures` the values it measured,
+    `found_by` how it was found, and `notes` free text."""
     name: str
     kind: str
     rule: str = ''
@@ -69,6 +72,7 @@ class Saved:
         raise ValueError(f'{self.name} is a {self.kind} configuration, not a rule')
 
     def table(self):
+        """The rule table (decoded from `rule` according to `kind`)."""
         space = self.space()
         if self.kind == 'moore':
             return decode(self.rule, space.size)
@@ -88,6 +92,7 @@ def encode(table):
 
 
 def decode(text, size):
+    """Hex string -> binary table of `size` entries (inverse of `encode`)."""
     return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8))[:size].astype(np.uint8)
 
 

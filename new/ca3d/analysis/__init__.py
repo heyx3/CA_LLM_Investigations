@@ -4,5 +4,7 @@
   dynamics     rule spaces and assays: how candidate rules are run before measuring
   search       bands, staged pipelines, samplers, target profiles, sweeps, tables
   influence    coupling tests for the hierarchy: pinning, perturbation, sensitivity
-  experiments  the original analysis scripts as named, re-runnable experiments
+  experiments  named, re-runnable experiments, each asking one question
+
+The vocabulary (lambda, soup, damage spreading, bands...) is in docs/CONCEPTS.md.
 """

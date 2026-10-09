@@ -1,19 +1,25 @@
 """Two-dimensional binary CA on a square lattice with the 3x3 Moore neighbourhood.
 
-Two rule representations are used:
+The Moore neighbourhood of a cell is the 3x3 block around it: the cell itself plus its
+8 neighbours (sides and diagonals).  Edges wrap around (a torus) unless a function
+says otherwise.  Two rule representations are used:
 
-* Outer-totalistic ("life-like", B/S notation).  The new state depends on the cell's
-  own state and on how many of its 8 neighbours are alive.  18-entry table,
-  index = own * 9 + count.  These rules are isotropic by construction.
+* Outer-totalistic ("life-like"), written in B/S notation.  The new state depends only
+  on the cell's own state and on how many of its 8 neighbours are alive.  "B3/S23"
+  (Conway's Game of Life) means: a dead cell is Born if it has 3 live neighbours, a
+  live cell Survives if it has 2 or 3, and every other cell is dead next step.  The
+  table has 18 entries, index = own * 9 + count (own is 0 or 1, count is 0..8).
+  These rules are isotropic: they treat all directions alike.
 
-* Non-totalistic.  The new state depends on the exact arrangement of the 3x3 block.
-  512-entry table, index = own * 256 + neighbour_byte, where bit b of the neighbour
-  byte is the cell at NEIGHBOUR_OFFSETS[b].  These can be anisotropic.
+* Non-totalistic.  The new state depends on the exact arrangement of the 3x3 block,
+  not just the count.  The table has 512 entries, index = own * 256 + neighbour_byte,
+  where bit b of the neighbour byte is the cell at NEIGHBOUR_OFFSETS[b].  These rules
+  can be anisotropic (prefer some directions).
 
 Any outer-totalistic rule expands losslessly into a 512-entry table
 (`expand_to_moore`); flipping a few entries of the expansion breaks its rotational
-symmetry while keeping its character.  That "expand and perturb" trick produced the
-rules behind the cityscape.
+symmetry while keeping most of its character.  This "expand and perturb" trick is how
+the cityscape's rules were made.
 
 All lattice functions act on the last two axes, so a stack of lattices (B, H, W) can
 be stepped at once, each with its own rule (tables shaped (B, 18) or (B, 512)).
@@ -25,10 +31,17 @@ import numpy as np
 from .rules import apply_table
 
 # Bit b of the neighbour byte holds the cell at (row + dy, col + dx) for the b-th
-# offset.  The order is inherited from raws/nontot.py so 512-entry tables keep their
-# meaning between the old and new code.
+# offset (rows increase downwards).  Laid out around the centre cell, the bits are
+#
+#     7 6 5
+#     4 . 3
+#     2 1 0
+#
+# so bit 0 is the cell below-right, bit 3 the cell to the right and bit 6 the cell
+# above.  Saved 512-entry tables depend on this order; do not change it.
 NEIGHBOUR_OFFSETS = [(1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1)]
 
+# POPCOUNT[b] = number of set bits in b: how many neighbours a neighbour byte has alive.
 POPCOUNT = np.array([bin(i).count('1') for i in range(256)], np.uint8)
 
 
@@ -71,7 +84,11 @@ def moore_code(s):
 # ---------------------------------------------------------------- B/S rules
 
 def parse_bs(rule):
-    """'B3/S23' -> 18-entry table.  Accepts 'B3/S23', 'b3s23', 'B/S012' etc."""
+    """'B3/S23' -> 18-entry table.  Accepts 'B3/S23', 'b3s23', 'B/S012' etc.
+
+    The digits after B are the live-neighbour counts at which a dead cell is born; the
+    digits after S are the counts at which a live cell survives.
+    """
     m = re.fullmatch(r'\s*[Bb]([0-8]*)\s*/?\s*[Ss]([0-8]*)\s*', rule)
     if not m:
         raise ValueError(f'not a B/S rule: {rule!r}')
@@ -84,7 +101,8 @@ def parse_bs(rule):
 
 
 def format_bs(table):
-    table = np.asarray(table)
+    """18-entry table -> 'B3/S23' notation (inverse of `parse_bs`)."""
+    table =np.asarray(table)
     births = ''.join(str(c) for c in range(9) if table[c])
     survivals = ''.join(str(c) for c in range(9) if table[9 + c])
     return f'B{births}/S{survivals}'
@@ -97,8 +115,8 @@ LIFE_WITHOUT_DEATH = parse_bs('B3/S012345678')
 def expand_to_moore(table18):
     """Outer-totalistic table -> equivalent 512-entry table.
 
-    Every neighbour arrangement inherits the output for its popcount, so the result
-    behaves identically to the original rule.
+    Every neighbour arrangement inherits the output for its popcount (its number of
+    live neighbours), so the result behaves identically to the 18-entry rule.
     """
     table18 = np.asarray(table18)
     own = np.repeat([0, 1], 256)
@@ -109,10 +127,12 @@ def expand_to_moore(table18):
 # ---------------------------------------------------------------- stepping
 
 def step_totalistic(s, table18, boundary='wrap'):
+    """One update of a 2D lattice (or stack of lattices) under an 18-entry B/S table."""
     return apply_table(table18, totalistic_code(s, boundary)).astype(np.uint8)
 
 
 def step_moore(s, table512):
+    """One update under a 512-entry table (periodic boundary)."""
     return apply_table(table512, moore_code(s)).astype(np.uint8)
 
 
@@ -150,9 +170,19 @@ def moore_permutation(quarter_turns=0, mirror=False):
 
         step_moore(s, table[perm]) == inverse_transform(step_moore(transform(s), table))
 
-    i.e. table[perm] is the rule that behaves like `table` on a transformed lattice.
-    A cell that sees neighbour offset o in the transformed lattice is reading the
-    original cell at offset A^-1 o.
+    i.e. table[perm] is the rule that behaves like `table` would on a transformed
+    lattice, but acts directly on the untransformed one.  This is how a rule is
+    "rotated" without touching the lattice.
+
+    Why it works: let A be the 2x2 matrix of the transform acting on (row, col)
+    offsets.  A cell that sees neighbour offset o in the transformed lattice is reading
+    the original cell at offset A^-1 o, so each bit of the neighbour byte is taken from
+    the bit that offset A^-1 o occupies.  The cell's own state is unchanged.
+
+    Example: take a rule that fires only when its right-hand neighbour (bit 3) is the
+    sole live neighbour.  After one counter-clockwise quarter turn the permuted table
+    fires only when the neighbour *below* (bit 1) is the sole live one: the cell that
+    lies to the right once the lattice has been turned is the one below in the original.
     """
     a_inv = _symmetry_matrix(quarter_turns, mirror).T     # orthogonal: inverse = transpose
     index = {o: b for b, o in enumerate(NEIGHBOUR_OFFSETS)}

@@ -15,9 +15,13 @@ Conventions
               Space-time volumes in this package keep time last; wolfram.spacetime
               returns (T, n), so pass time_axis=0 for those.
   boundaries  Neighbourhood measures (compactness, coherence, autocorrelation) wrap
-              periodically, as the original scripts did.
+              periodically: the array is treated as a torus.
 
-Groups, following raws/"Quantifying Cellular Automaton Output.md":
+Terms used below: "live" cells are the 1s (solid voxels); a "component" is a connected
+blob of live cells; "autocorrelation" at lag k is how strongly the array resembles
+itself shifted by k cells (1 = identical, 0 = unrelated).
+
+Groups:
 
   occupancy   density, entropy, block_entropy, gzip_ratio
   spatial     compactness, coherence, components, largest_void_share, autocorrelation,
@@ -71,7 +75,7 @@ def _out(x):
     return x.item() if x.ndim == 0 else x
 
 
-def _per_sample(fn, X, dims):
+def per_sample(fn, X, dims):
     """Apply fn to every sample of a batch; results stacked to the batch shape."""
     d = _ndims(X, dims)
     if d == X.ndim:
@@ -125,7 +129,7 @@ def block_entropy(X, size=2, dims=None):
 
 
 def gzip_ratio(X, relative=False, seed=0):
-    """Compressed size / raw size, one byte per cell (as the original measured it).
+    """Compressed size / raw size, using gzip on one byte per cell.
 
     Near 0 is order; the noise ceiling depends on density.  With relative=True the
     ratio is divided by that of the same cells shuffled, so 1.0 means "compresses no
@@ -142,7 +146,8 @@ def gzip_ratio(X, relative=False, seed=0):
 # ---------------------------------------------------------------- spatial structure
 
 def box3_sum(X, axes):
-    """Sum over the 3^d box around every cell (self included), periodic."""
+    """Sum over the 3^d box around every cell (self included), periodic.  `axes` are the
+    axes that form the box (the 2 or 3 lattice axes of a sample)."""
     total = np.asarray(X, np.uint8)
     for a in axes:
         total = total + np.roll(total, 1, a) + np.roll(total, -1, a)
@@ -160,10 +165,14 @@ def compactness(X, dims=None):
 
 
 def coherence(X, dims=None):
-    """Mean live face-neighbour count among live cells / (2d x density).
+    """How clustered the live cells are: the mean number of live face-neighbours of a
+    live cell, divided by what random noise of the same density would give.
 
-    1.0 is the random-noise baseline; above 2 is clustered.  It saturates once octave
-    blending is involved (every base rule read 3.06-3.21), so prefer part counts there."""
+    A cell has 2d face neighbours (4 in 2D, 6 in 3D); in noise of density p, a live
+    cell has 2d * p of them alive on average, so the ratio is
+    (mean live neighbours of live cells) / (2d * p).  1.0 is the random-noise
+    baseline; above 2 is clustered.  It stops distinguishing heavily blended volumes
+    (octave blends all read about 3), so prefer part counts there."""
     X = np.asarray(X, bool)
     axes = _sample_axes(X, dims)
     nb = sum(np.roll(X, s, a).astype(np.int8) for a in axes for s in (-1, 1))
@@ -178,12 +187,14 @@ _CONNECTIVITY = {4: 1, 6: 1, 8: 2, 18: 2, 26: 3}
 
 
 def _structure(ndim, connectivity):
-    """connectivity None = faces only; 4/8 (2D), 6/18/26 (3D) as usual."""
+    """Neighbourhood used to decide that two live cells touch.  None = faces only;
+    otherwise the usual 4/8 (2D) or 6/18/26 (3D) connectivity."""
     rank = 1 if connectivity is None else _CONNECTIVITY[connectivity]
     return ndimage.generate_binary_structure(ndim, min(rank, ndim))
 
 
 def component_sizes(X, connectivity=None):
+    """Sizes (cell counts) of the connected blobs of live cells, as an int array."""
     labels, count = ndimage.label(np.asarray(X, bool), _structure(np.ndim(X), connectivity))
     return np.bincount(labels.ravel())[1:] if count else np.zeros(0, np.int64)
 
@@ -191,10 +202,10 @@ def component_sizes(X, connectivity=None):
 def components(X, connectivity=None):
     """(count, median size, largest component's share of live cells).
 
-    The most discriminating single measure found.  Use all three numbers: a
-    percolating structure has one component holding ~99% of the mass and median size
-    1, and then any *mean* component size is meaningless.  Default connectivity is
-    faces only (4 in 2D, 6 in 3D), as the original scripts used."""
+    A component is a blob of live cells that touch.  Use all three numbers: a
+    percolating structure (one that spans the whole array) has one component holding
+    ~99% of the mass and a median size of 1, and then any *mean* component size is
+    meaningless.  Default connectivity is faces only (4 in 2D, 6 in 3D)."""
     sizes = component_sizes(X, connectivity)
     if sizes.size == 0:
         return 0, 0.0, 0.0
@@ -202,13 +213,16 @@ def components(X, connectivity=None):
 
 
 def largest_void_share(X):
-    """Largest connected empty region as a fraction of the whole array (cityscape 0.80)."""
+    """Size of the largest connected empty region as a fraction of the whole array.
+    High values mean the volume is mostly open space; the cityscape reads 0.80."""
     sizes = component_sizes(~np.asarray(X, bool))
     return float(sizes.max() / np.size(X)) if sizes.size else 0.0
 
 
 def autocorrelation(X, axis, lag, dims=None):
-    """Periodic autocorrelation of the centred array along one axis."""
+    """Periodic autocorrelation along one axis: subtract the mean, shift by `lag`
+    cells, and take the normalised dot product with the original.  1 means the
+    shifted array is identical, 0 unrelated, negative anti-correlated."""
     X = np.asarray(X, np.float32)
     axes = _sample_axes(X, dims)
     x = X - X.mean(axis=axes, keepdims=True)
@@ -219,10 +233,11 @@ def autocorrelation(X, axis, lag, dims=None):
 
 
 def correlation_length(X, axis, maxlag=48, dims=None):
-    """Smallest lag at which autocorrelation along `axis` drops below 1/e (maxlag if it
-    never does, 0 for a uniform array).  1 means the output decorrelates after a single
-    cell however structured it looks.  Along the time axis of a space-time volume this
-    is the temporal correlation length: how many steps structure survives."""
+    """Smallest lag at which autocorrelation along `axis` drops below 1/e ~ 0.37
+    (maxlag if it never does, 0 for a uniform array): roughly, how far apart two cells
+    can be and still resemble each other.  1 means the output decorrelates after a
+    single cell however structured it looks.  Along the time axis of a space-time
+    volume this is the temporal correlation length: how many steps structure survives."""
     X = np.asarray(X, np.float32)
     axes = _sample_axes(X, dims)
     a = _axis(X, axis, dims)
@@ -251,16 +266,19 @@ def correlation_lengths(X, maxlag=48, dims=None):
 
 def anisotropy(X, lag=3, dims=None):
     """Spread (max - min) of the autocorrelation at `lag` across axes; in 2D this is
-    |horizontal - vertical|.  Exactly 0 for any outer-totalistic rule, so an expanded
-    and perturbed rule still reading ~0 was not changed by the perturbation."""
+    |horizontal - vertical|.  Zero on average for any outer-totalistic (isotropic) rule,
+    though a single finite state shows a little noise (roughly 0.02), so an expanded
+    and perturbed rule still reading that low was not changed by the perturbation."""
     X = np.asarray(X)
     c = np.stack([np.asarray(autocorrelation(X, a, lag, dims)) for a in range(_ndims(X, dims))])
     return _out(c.max(axis=0) - c.min(axis=0))
 
 
 def fractal_dimension(X, scales=(1, 2, 4, 8, 16)):
-    """Box-counting slope over block sizes `scales`.  3D: 3.0 space-filling, ~2.5 3D
-    DLA, lower is wispier (2D: 2.0 filling).  Better as a target than a filter."""
+    """Box-counting dimension: cover the array with boxes of side b, count the boxes
+    that contain any live cell, and fit the slope of log(count) against log(1/b) over
+    the box sizes `scales`.  3D: 3.0 space-filling, ~2.5 for a diffusion-limited
+    aggregate, lower is wispier (2D: 2.0 filling).  Better as a target than a filter."""
     X = np.asarray(X, bool)
     xs, ys = [], []
     for b in scales:
@@ -297,8 +315,9 @@ def _time_last(X, time_axis, dims):
 
 def pillar_fraction(X, min_run=16, time_axis=-1, dims=None):
     """Fraction of live cells inside a run of >= min_run unchanged steps along time:
-    how much of a volume is extruded static pattern.  Near 0 nothing persists; near
-    0.7 the volume is prisms with no life.  The cityscape sits at 0.46."""
+    how much of a volume is a static pattern extruded through time (vertical pillars,
+    since a 2D pattern that stays put is a prism in space-time).  Near 0 nothing
+    persists; near 0.7 the volume is prisms with no life.  The cityscape reads 0.46."""
     V, space = _time_last(X, time_axis, dims)
     run = np.zeros(V.shape[:-1], np.int32)
     total = np.zeros(V.shape[:V.ndim - 1 - len(space)], np.int64)
@@ -310,9 +329,9 @@ def pillar_fraction(X, min_run=16, time_axis=-1, dims=None):
 
 
 def overhang_fraction(X, time_axis=-1, dims=None):
-    """Live cells with an empty cell directly below them (along `time_axis`), as a
-    fraction of the array.  Exactly 0 for any heightfield, e.g. the space-time of any
-    monotone rule; 0.002-0.005 indicates real overhangs."""
+    """Live cells with an empty cell directly below them (the previous step along
+    `time_axis`), as a fraction of the array.  Exactly 0 for any heightfield, e.g. the
+    space-time of a rule that never kills cells; 0.002-0.005 indicates real overhangs."""
     V, space = _time_last(X, time_axis, dims)
     return _out((V[..., 1:] & ~V[..., :-1]).mean(axis=space + (V.ndim - 1,)))
 
@@ -320,7 +339,8 @@ def overhang_fraction(X, time_axis=-1, dims=None):
 # ---------------------------------------------------------------- slices
 
 def slice_density(X, axis=0):
-    """Density of every slice across `axis`: the per-slab series of a layered build."""
+    """Density of every slice across `axis`, as a 1D series: one value per slab of a
+    layered build."""
     X = np.asarray(X, bool)
     return X.mean(axis=tuple(a for a in range(X.ndim) if a != axis % X.ndim))
 
@@ -333,9 +353,10 @@ def series_autocorrelation(x, lag):
 
 
 def series_correlation_length(x, maxlag=48):
-    """Smallest lag at which a series' autocorrelation drops below 1/e.  Along the slab
-    axis of a double space-time, independent mutations give ~1 (white noise); a rule
-    walk gives correlation that decays over ~16 slabs."""
+    """Smallest lag at which a 1D series' autocorrelation drops below 1/e (0 for a
+    constant series, maxlag if it never does).  Along the slab axis of a double
+    space-time, independent mutations give ~1 (white noise); a rule walk gives
+    correlation that decays over ~16 slabs."""
     if np.var(x) <= 0:
         return 0
     for lag in range(1, maxlag):
@@ -345,8 +366,9 @@ def series_correlation_length(x, maxlag=48):
 
 
 def degenerate_slices(X, axis=0, empty=0.02, solid=0.95):
-    """(empty slices, solid slices) across `axis`: absorbing-state failures of cascade
-    seeding show up as whole slabs gone empty or solid."""
+    """(empty slices, solid slices) across `axis`: counts of slices with density below
+    `empty` or above `solid`.  Cascade seeding can leave a slab all-0 or all-1, states a
+    1D rule never leaves; these show up as whole slabs gone empty or solid."""
     d = slice_density(X, axis)
     return int((d < empty).sum()), int((d > solid).sum())
 
@@ -354,13 +376,16 @@ def degenerate_slices(X, axis=0, empty=0.02, solid=0.95):
 # ---------------------------------------------------------------- motifs
 
 def _line(ndim, axis, length):
+    """Structuring element: a straight line of `length` cells along `axis`."""
     shape = [1] * ndim
     shape[axis] = length
     return np.ones(shape, bool)
 
 
 def long_runs(mask, length, axes=None):
-    """Cells in a run of at least `length` along any of `axes` (default: all axes)."""
+    """Cells that lie in a straight run of at least `length` live cells along any of
+    `axes` (default: all axes).  Implemented as a morphological "opening" with a line:
+    erode away everything shorter than the line, then grow back what survives."""
     mask = np.asarray(mask, bool)
     axes = range(mask.ndim) if axes is None else [a % mask.ndim for a in axes]
     out = np.zeros_like(mask)
@@ -370,7 +395,8 @@ def long_runs(mask, length, axes=None):
 
 
 def bulk(mask, size, axes=None):
-    """Cells inside a box of side `size` spanning `axes` (default: all axes)."""
+    """Cells inside a solid box of side `size` spanning `axes` (default: all axes):
+    the part of the mask that is thick in every direction."""
     mask = np.asarray(mask, bool)
     axes = range(mask.ndim) if axes is None else [a % mask.ndim for a in axes]
     shape = [size if a in axes else 1 for a in range(mask.ndim)]
@@ -378,14 +404,17 @@ def bulk(mask, size, axes=None):
 
 
 def thin_linear(mask, length=8, square=4, axes=None):
-    """Long in one axis AND thin in the others: survives a line opening but not a box
-    opening.  A line opening alone is satisfied by any dense blob (it read 0.890 on a
-    solid blob); the difference read 0.704 on ladders and 0.094 on bulk."""
+    """Cells that are long in one axis AND thin in the others: they lie in a run of
+    `length` but not in a solid box of side `square`.  A run test alone is satisfied
+    by every cell of a dense blob, so the box test is subtracted to leave only
+    ladder-like fingers.  (Compare `bulk`.)"""
     return long_runs(mask, length, axes) & ~bulk(mask, square, axes)
 
 
 def streaks(V, length=14, tall=8, time_axis=-1):
-    """Horizontal streaks: long along a spatial axis, short in time."""
+    """Mask of horizontal streaks in a space-time volume: runs of at least `length`
+    live cells along a spatial axis that are not part of a `tall` or longer run in time
+    (so thin slivers in time, not pillars)."""
     V = np.asarray(V, bool)
     t = time_axis % V.ndim
     space = [a for a in range(V.ndim) if a != t]
@@ -393,17 +422,18 @@ def streaks(V, length=14, tall=8, time_axis=-1):
 
 
 def share(part, whole):
-    """|part| / |whole|."""
+    """|part| / |whole|: the number of True cells in `part` over those in `whole`."""
     return float(np.sum(part) / max(int(np.sum(whole)), 1))
 
 
 def streak_fraction(V, length=14, tall=8, time_axis=-1):
-    """Share of live voxels in horizontal streaks (cityscape: 2.9%)."""
+    """Share of live voxels that lie in horizontal streaks (the cityscape reads 2.9%)."""
     return share(streaks(V, length, tall, time_axis), V)
 
 
 def thinness(mask, length=8, square=4, axes=None):
-    """Share of live cells that are thin-linear."""
+    """Share of live cells that are `thin_linear` (long and thin).  Ladders read about
+    0.70, bulk about 0.09."""
     return share(thin_linear(mask, length, square, axes), mask)
 
 
@@ -437,9 +467,10 @@ def schedule_confound(motif, steps, time_axis=-1):
 
 
 def domain_filter(spacetime, period=1, shift=0, time_axis=-1):
-    """Defects of a 1D space-time image against a periodic background: cell XOR the
-    cell `period` steps earlier displaced by `shift` cells.  Where the background holds
-    the result is 0; particles and domain walls survive."""
+    """Defects of a 1D space-time image against a periodic background: each cell XOR
+    the cell `period` steps earlier displaced by `shift` cells.  Where the background
+    pattern holds the result is 0; particles and domain walls (the boundaries between
+    regions of different background) survive."""
     X = np.moveaxis(np.asarray(spacetime, bool), time_axis % 2, 0)
     return np.moveaxis(X[period:] ^ np.roll(X[:-period], shift, axis=1), 0, time_axis % 2)
 
@@ -461,6 +492,7 @@ def best_domain_filter(spacetime, max_period=4, max_shift=4, time_axis=-1):
 
 @dataclass(frozen=True)
 class Measure:
+    """A registered measure: the function plus how to call it and how to read it."""
     fn: Callable
     reads: str                    # what the values mean
     batched: bool = True          # accepts dims= (otherwise looped over a batch)
@@ -468,6 +500,8 @@ class Measure:
     outputs: tuple = ()           # names of several returned values
 
 
+# name -> Measure.  The `reads` text is the quick guide to interpreting a value: the
+# bands inside which interesting output tends to live, and the degenerate extremes.
 MEASURES = {
     'density': Measure(density, 'live fraction; gate rules on 0.15-0.85; 3D over ~0.35 is opaque'),
     'entropy': Measure(entropy, 'cell-state entropy in bits; 0 uniform, 1 half full'),
@@ -499,7 +533,7 @@ MEASURES = {
 }
 
 # output name -> measure that produces it
-_PRODUCERS = {out: name for name, m in MEASURES.items() for out in (m.outputs or (name,))}
+PRODUCERS = {out: name for name, m in MEASURES.items() for out in (m.outputs or (name,))}
 
 
 def describe_measures():
@@ -515,12 +549,16 @@ def describe_measures():
 def measure(X, names=('density', 'compactness', 'components'), dims=None, time_axis=-1):
     """Several measures at once: {output name: value}.  `names` may mix measure names
     and output names ('components' gives parts, median_part and largest_part; 'parts'
-    computes the same measure once).  With a batch, every value is an array."""
+    computes the same measure once).  With a batch, every value is an array.
+
+    `dims` is the number of trailing axes forming one sample (see the module docstring)
+    and `time_axis` the time axis within a sample, used only by temporal measures.
+    """
     X = np.asarray(X)
     d = _ndims(X, dims)
     wanted, order = {}, []
     for name in names:
-        producer = name if name in MEASURES else _PRODUCERS.get(name)
+        producer = name if name in MEASURES else PRODUCERS.get(name)
         if producer is None:
             raise KeyError(f'unknown measure {name!r}; see metrics.describe_measures()')
         if producer not in order:
@@ -535,10 +573,12 @@ def measure(X, names=('density', 'compactness', 'components'), dims=None, time_a
         elif d == X.ndim:
             value = m.fn(X, **kw)
         else:
-            value = _per_sample(lambda s: np.asarray(m.fn(s, **kw), np.float64), X, d)
+            value = per_sample(lambda s: np.asarray(m.fn(s, **kw), np.float64), X, d)
         if m.outputs:
             n_out = len(value) if isinstance(value, tuple) else np.shape(value)[-1]
             for i, o in enumerate(m.outputs[:n_out]):
+                # keep every output if the measure was asked for by its own name,
+                # otherwise only the outputs that were named
                 if producer in wanted[producer] or o in wanted[producer]:
                     out[o] = value[i] if isinstance(value, tuple) else _out(np.asarray(value)[..., i])
         else:
@@ -547,7 +587,8 @@ def measure(X, names=('density', 'compactness', 'components'), dims=None, time_a
 
 
 def summary(V):
-    """The handful of numbers worth printing for any volume."""
+    """The handful of numbers worth printing for any volume: density, coherence, and
+    the component statistics (part count, median part size, largest part's share)."""
     count, median, largest = components(V)
     return {'density': float(np.mean(V)), 'coherence': coherence(V), 'parts': count,
             'median_part': median, 'largest_part_share': largest}

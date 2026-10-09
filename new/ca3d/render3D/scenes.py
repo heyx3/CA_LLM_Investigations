@@ -2,8 +2,7 @@
 
 Each recipe takes (seed, size) and returns a Scene: an occupancy volume plus how to
 colour it.  `size` is the main lattice/volume edge length; None means the recipe's
-default.  Parameters follow the configurations recorded in the raws notes where
-they are known.
+default.  Parameters are the configurations that gave the best results.
 
     from ca3d.render3D import scenes
     scene = scenes.SCENES['cityscape'](seed=3)
@@ -14,6 +13,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from . import color
+from ..analysis import metrics
 from ..rulesets import (cityscape as city, deposition, double_spacetime as dst, families, hierarchy,
                         lattice_gas, life, lwd, octaves, saved, triplanar as tri, wolfram)
 from .render import Camera, cut_octant, render
@@ -23,6 +23,12 @@ SCENES = {}
 
 @dataclass
 class Scene:
+    """What a recipe returns: a volume plus how to colour and view it.
+
+    `attr` colours the voxels: a float field in [0, 1] mapped through a colour ramp, or,
+    when `palette` is given, an integer index volume into that (K, 3) palette.
+    `info` holds extra facts about the run (steps taken, uncut density...).
+    """
     volume: np.ndarray                  # bool [x, y, z], z up
     attr: np.ndarray | None = None      # float [0, 1] field, or palette index volume
     palette: np.ndarray | None = None
@@ -34,6 +40,7 @@ class Scene:
 
 
 def scene(fn):
+    """Decorator: register a recipe fn(seed, size) -> Scene in SCENES under its name."""
     SCENES[fn.__name__] = fn
     return fn
 
@@ -57,10 +64,11 @@ def life_spacetime(seed=4, size=None):
 
 @scene
 def double_spacetime(seed=20, size=None):
-    """Rule-space walk + partial cascade (raws/exp12.py).  Dense, so a corner is cut."""
+    """Rule-space walk + partial cascade (see rulesets/double_spacetime.py).  Dense, so
+    a corner is cut away to look inside."""
     n = size or 96
     vol = dst.double_spacetime(n=n, mutation='walk', flips=1, cascade=0.5, seed=seed)
-    return Scene(cut_octant(vol, n * 11 // 24), info={'uncut_density': float(vol.mean())})
+    return Scene(cut_octant(vol), info={'uncut_density': float(vol.mean())})
 
 
 @scene
@@ -99,7 +107,7 @@ def octave_blend(seed=20, size=None):
                                     seed=level_seed)
 
     vol = octaves.octave_blend(build, levels, persistence=0.35, density=0.30, seed=seed)
-    return Scene(cut_octant(vol, n * 11 // 24), info={'uncut_density': float(vol.mean())})
+    return Scene(cut_octant(vol), info={'uncut_density': float(vol.mean())})
 
 
 # ---------------------------------------------------------------- Life without Death
@@ -125,7 +133,7 @@ def lwd_ladders(seed=0, size=None):
                                                 max_steps=4 * n, stop_at_edge=True)
         if (birth >= 0).sum() > 2000:
             break
-    ladders = lwd.thin_linear(birth >= 0, length=8, square=4)
+    ladders = metrics.thin_linear(birth >= 0, length=8, square=4)
     heights = lwd.birth_heightfield(birth, size=n, mask=ladders)
     return Scene(lwd.heightfield_volume(heights, n), info={'steps': steps})
 
@@ -155,7 +163,7 @@ def lattice_gas_dla(seed=1, size=None):
 @scene
 def frozen_deposition(seed=1, size=None):
     """Multistate CA where frozen material blocks new ignition: concentric wave fossils.
-    The documented run (density 0.101, coherence 4.17, 3,434 parts at 96^3)."""
+    The reference run (density 0.101, coherence 4.17, 3,434 parts at 96^3)."""
     st, steps, why = deposition.frozen_deposition(n=size or 96, seed=seed)
     return Scene(st == deposition.FROZEN, info={'steps': steps, 'stop': why})
 
@@ -165,7 +173,7 @@ def hangar(seed=3, size=None):
     """Majority-smoothed chambers (macro) dressed with lambda-terrain detail (micro)."""
     n = size or 96
     vol = deposition.hangar(deposition.macro_chambers(n, seed), dst.lambda_terrain(n=n, seed=seed))
-    return Scene(cut_octant(vol, n * 11 // 24), info={'uncut_density': float(vol.mean())})
+    return Scene(cut_octant(vol), info={'uncut_density': float(vol.mean())})
 
 
 # ---------------------------------------------------------------- hierarchical CA
@@ -176,7 +184,7 @@ def _hierarchy_scene(ca, steps, colour='context', smooth_size=5, cut=False):
     st = ca.run(steps, record_layers=colour == 'hsv')
     info = {'rotations': st.rotations, 'uncut_density': float(st.fine.mean())}
     if cut:                    # dense volumes: remove the corner facing the camera
-        st.fine = cut_octant(st.fine, st.fine.shape[0] * 11 // 24)
+        st.fine = cut_octant(st.fine)
     if colour == 'height':
         return Scene(st.fine, info=info)
     if colour == 'hsv':        # hue <- coarsest, value <- next, saturation <- layer 1
@@ -192,7 +200,7 @@ def _hierarchy_scene(ca, steps, colour='context', smooth_size=5, cut=False):
 
 @scene
 def hierarchy_random(seed=1, size=None):
-    """4-layer outer-totalistic hierarchy with uniformly random rule tables (raws/ca2d.py):
+    """4-layer outer-totalistic hierarchy with uniformly random rule tables (18-entry tables):
     the baseline that shows why rule choice matters."""
     n = size or 128
     rng = np.random.default_rng(seed)
@@ -205,7 +213,7 @@ def hierarchy_random(seed=1, size=None):
 
 @scene
 def hierarchy_sg0(seed=0, size=None):
-    """The fully documented early totalistic configuration (render sg_0): slow/compact
+    """An early, purely totalistic configuration (the `sg_0` render): slow/compact
     coarse rules, eight edge-of-chaos rules on the fine layer."""
     n = size or 128
     rng = np.random.default_rng(seed)
@@ -223,7 +231,7 @@ def hierarchy_sg0(seed=0, size=None):
 @scene
 def hierarchy_moore(seed=0, size=None):
     """Non-totalistic (512-bit) hierarchy: slow coarse layers, edge-of-chaos fine layer,
-    uniform random start (raws/nt_stack.py)."""
+    uniform random start."""
     n = size or 160
     pools = families.load_pools()
     rng = np.random.default_rng(seed)
@@ -238,7 +246,7 @@ def hierarchy_moore(seed=0, size=None):
 @scene
 def cityscape(seed=3, size=None):
     """The cityscape: 2 dead / 4 static / 2 complex contexts on the fine layer.  Seed 3
-    reproduces the original's coarse layers exactly."""
+    is the reference cityscape."""
     n = size or 160
     return _hierarchy_scene(city.make(seed, n), n, colour='height')
 
@@ -259,7 +267,7 @@ def cityscape_ladder(seed=3, size=None):
     `seed` varies only the initial condition; the rules are the seed-3 cityscape's."""
     n = size or 160
     ca = city.make(3, n, ic_seed=seed, rotation=hierarchy.RotateOnDensityLadder(0.05))
-    return _hierarchy_scene(ca, round(n * 2 / 3), colour='height')   # 107 steps, as originally
+    return _hierarchy_scene(ca, round(n * 2 / 3), colour='height')   # 107 steps at n = 160
 
 
 @scene
@@ -272,7 +280,7 @@ def cityscape_hsv(seed=3, size=None):
 
 @scene
 def cityscape_twin(seed=3, size=None):
-    """Five layers with an extra full-resolution context layer (raws/twin_fine.py)."""
+    """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8)."""
     n = size or 160
     ca = city.make(seed, n, plan=city.PLAN * 2, scales=(1, 1, 2, 4, 8))
     return _hierarchy_scene(ca, n, colour='height')
@@ -304,7 +312,7 @@ def from_saved(name, seed=None, size=None):
     vol = traj.history[0] if space.ndim == 2 else traj.final[0].astype(bool)
     info = {'uncut_density': float(vol.mean())}
     if vol.mean() > 0.3:          # opaque from outside: remove the corner facing the camera
-        vol = cut_octant(vol, vol.shape[0] * 11 // 24)
+        vol = cut_octant(vol)
     return Scene(vol, info=info)
 
 
@@ -319,7 +327,7 @@ def build(name, seed=None, size=None):
 # ---------------------------------------------------------------- 2D images
 
 def hierarchy_1d_image(seed=3, n=512, steps=512, wiring='all', top_rule=1):
-    """1D 4-layer hierarchy (raws/allparents.py, stack.py) as a 2D space-time image:
+    """1D 4-layer hierarchy as a 2D space-time image:
     time runs down, coarse layers shade the background, fine layer draws dark marks."""
     rng = np.random.default_rng(seed)
     scales = hierarchy.pow2_scales(4)

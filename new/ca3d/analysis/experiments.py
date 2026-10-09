@@ -1,9 +1,11 @@
-"""The original analysis scripts, rebuilt as named, re-runnable experiments.
+"""Named, re-runnable experiments: each asks one question about a CA construction.
 
-Each experiment re-asks a question the original chat asked, prints its tables, and
-under each table quotes the numbers recorded in raws/ ("notes: ...") so the two can
-be compared.  Every experiment returns its tables (search.Table) and accepts
-quick=True, which shrinks it to a smoke test.
+An experiment runs the construction, prints its tables, and under each table quotes
+the numbers recorded for the same question earlier ("notes: ...") so the two can be
+compared.  Those quoted numbers are reference data for checking that the code still
+behaves as it did; they are not needed to use the experiments.  Every experiment
+returns its tables (search.Table) and accepts quick=True, which shrinks it to a
+smoke test.
 
     python scripts/run_experiment.py --list
     python scripts/run_experiment.py slow_perturbation
@@ -56,9 +58,9 @@ def _timed(fn):
 
 @experiment
 def dead_static(quick=False, log=print):
-    """raws/pillars.py: random B/S rules judged from a dense start (p0 = 0.85).  Dying
-    and freezing rules are defined by what they do to existing material, so a sparse
-    start would never engage them."""
+    """How many random B/S rules are "dead" or "static" when judged from a dense start
+    (p0 = 0.85)?  Dying and freezing rules are defined by what they do to existing
+    material, so a sparse start would never engage them."""
     trials = 900 if quick else 9000
     found = families.search_dead_static(trials)
     t = Table([{'family': k, 'found': len(v), 'of': trials,
@@ -69,9 +71,9 @@ def dead_static(quick=False, log=print):
 
 @experiment
 def slow_perturbation(quick=False, log=print):
-    """raws/nontot.py: expand the four slow/compact B/S rules to 512 entries, flip k
-    entries, keep what is still slow and compact.  Anisotropy (zero for any totalistic
-    rule) grows with k while compactness holds, until everything dies."""
+    """Expand the four slow/compact B/S rules to 512 entries, flip k entries, keep what
+    is still slow and compact.  Anisotropy (zero for any totalistic rule) grows with k
+    while compactness holds, until everything dies."""
     seeds = np.array([life.parse_bs(r) for r in families.SLOW_SEEDS])
     slow = families.FAMILIES['slow'].stages[0]
     pipeline = Pipeline.single(slow.criteria + [Criterion('anisotropy', None)], slow.assay)
@@ -102,8 +104,8 @@ def _bin_table(x, x_edges, x_name, y, y_edges, y_labels):
 
 @experiment
 def rule_census(quick=False, log=print):
-    """Random life-like rules on the regime and structure measures: the census behind
-    the notes' hit rates, and the staged filter (density -> damage -> change ->
+    """Random life-like rules on the regime and structure measures: how many land in
+    each damage-spreading regime, and the staged filter (density -> damage -> change ->
     compactness) with its pass rate at each stage."""
     space = dynamics.Totalistic()
     count = 400 if quick else 6000
@@ -283,11 +285,10 @@ def cityscape_contexts(quick=False, log=print):
 
 @experiment
 def initial_conditions(quick=False, log=print):
-    """raws/seeds.py: the rotating cityscape (period 40) from different starts.  The
-    original replaced only the finest layer's state, and every start gave the same
-    city: the coarse layers, which never see the fine layer, decide what grows where.
-    Starting the coarse layers from the same pattern (block-averaged to their scales)
-    is what changes the city."""
+    """The rotating cityscape (period 40) from different starts.  Replacing only the
+    finest layer's state gives the same city every time: the coarse layers, which never
+    see the fine layer, decide what grows where.  Starting the coarse layers from the
+    same pattern (block-averaged to their scales) is what changes the city."""
     pools = _pools()
     n = 48 if quick else 160
     names = ['blobs', 'uniform', 'sparse_points', 'rings', 'gradient', 'quadrants', 'half_plane']
@@ -301,7 +302,7 @@ def initial_conditions(quick=False, log=print):
     t = Table()
     for name in names[:3] if quick else names:
         start = initial.STARTS[name]
-        if name == 'blobs':                                  # seeds.py's blobs_fine
+        if name == 'blobs':                                  # blobs at scale 4 (the 'blobs_fine' row)
             start = lambda size, rng: initial.blobs(size, rng, scale=4)
         row = {'start': labels.get(name, name)}
         for label, coarse in (('fine only', None), ('all layers', start)):
@@ -310,22 +311,22 @@ def initial_conditions(quick=False, log=print):
             row[f'{label}: void'] = metrics.largest_void_share(F)
             row[f'{label}: differs'] = float((F != reference).mean())
         t.add(row)
-    _report(log, 'starting the fine layer only (as seeds.py did) vs every layer '
+    _report(log, 'starting the fine layer only vs every layer '
             '(differs: voxels unlike the default cityscape)', t, [
                 'fine only: blobs_fine 0.195 / 80.4%, blobs_coarse 0.195 / 80.4%, uniform '
                 '0.195 / 80.3%, sparse 0.193 / 80.5%, rings 0.194 / 80.4%, gradient 0.194 / 80.4%',
-                'the notes call the patchy start "essential: dying rules need material to erode"'])
+                'whatever the fine layer starts from, the city is the same; only starting the coarse layers changes it'])
     ladder = Table()
-    for label, start in (('blobs (S.blobs)', initial.blobs), ('empty', initial.empty),
+    for label, start in (('blobs', initial.blobs), ('empty', initial.empty),
                          ('full', initial.full)):
         ca = cityscape.make(3, n, pools=pools, start=start,
                             rotation=hierarchy.RotateOnDensityLadder(0.05))
         st = ca.run(round(n * 2 / 3))
         ladder.add({'fine start': label, 'density': float(st.fine.mean()),
                     'rotations': ' '.join(str(s) for s, _ in st.rotations)})
-    _report(log, 'the density-ladder cityscape: S.blobs is our blobs exactly', ladder,
-            'seed 3 with S.blobs: density 0.242, rotations 36 52 60 68 92.  Our blobs are '
-            'identical, so the 0.010 gap is the rebuilt complex pool')
+    _report(log, 'the density-ladder cityscape from different fine-layer starts', ladder,
+            'recorded for seed 3 with blobs: density 0.242, rotations 36 52 60 68 92.  The '
+            '0.010 gap is the rebuilt complex pool')
     return {'starts': t, 'ladder': ladder}
 
 
@@ -352,7 +353,7 @@ def context_plans(quick=False, log=print):
 def plan_search(quick=False, log=print):
     """Target-profile search over context plans: every split of the 8 fine contexts
     into dead / static / complex (in that order), over several rule draws, ranked by
-    distance to the cityscape's recorded profile.  The template for "find
+    distance to the cityscape's measured profile.  The template for "find
     configurations near an output I like": the nearest single runs are candidates to
     render, the per-split means say which plans land there reliably."""
     pools = _pools()
@@ -375,8 +376,10 @@ def plan_search(quick=False, log=print):
 
 
 def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77):
-    """raws/ablate.py run(): coarse tables drawn coarsest-first from rng(seed), the plan
-    from rng(plan_seed), then the coarse states; phase = min(i, period - 1)."""
+    """A hierarchy with the layer scales `divs` for the layer-ablation experiment.
+    Draw order (kept fixed so seeds stay comparable): coarse tables coarsest-first from
+    rng(seed), the plan from rng(plan_seed), then the coarse states.  Layer i fires at
+    phase min(i, period - 1)."""
     L = len(divs)
     rng = _rng(seed)
     banks = [None] * L
@@ -391,7 +394,7 @@ def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77):
 
 @experiment
 def layer_ablation(quick=False, log=print):
-    """raws/ablate.py: remove one coarse layer and compare.  Confound: three layers
+    """Remove one coarse layer and compare.  Confound: three layers
     give the fine layer 4 contexts instead of 8, so the plan changes too (here the
     same 1:2:1 dead/static/complex ratio)."""
     pools = _pools()
@@ -412,10 +415,10 @@ def layer_ablation(quick=False, log=print):
 
 @experiment
 def schedule_stagger(quick=False, log=print):
-    """raws/staggered.py: aligned schedules (every layer fires on step period - 1, so
-    all four coincide every 8th step) against staggered ones (phase = log2(period)),
-    on the early totalistic configuration (slow coarse rules, edge-of-chaos fine rules;
-    the original edge pool is lost, the sg_0 rules stand in for it)."""
+    """Aligned schedules (every layer fires on step period - 1, so all four coincide
+    every 8th step) against staggered ones (phase = log2(period)), on the early
+    totalistic configuration (slow coarse rules, edge-of-chaos fine rules from
+    families.EDGE_OF_CHAOS)."""
     n = 64 if quick else 160
     slow18 = np.array([life.parse_bs(r) for r in families.SLOW_SEEDS])
     edge18 = np.array([life.parse_bs(r) for r in families.EDGE_OF_CHAOS])
@@ -449,8 +452,7 @@ def schedule_stagger(quick=False, log=print):
 
 @experiment
 def wiring_influence(quick=False, log=print):
-    """raws/allparents.py, stack.py, stack2.py on the 1D four-layer hierarchy: does each
-    coarse layer reach the fine layer?  Chain wiring (each layer reads its parent only)
+    """On the 1D four-layer hierarchy: does each coarse layer reach the fine layer?  Chain wiring (each layer reads its parent only)
     against all-parents wiring, and chain wiring with XOR-coupled tables.  Pinning and
     one-cell perturbations measure reach; uniform vs effective parent sensitivity shows
     why the chain fails."""
@@ -519,8 +521,8 @@ def _volume_row(V, seconds=None, maxlag=48):
 
 @experiment
 def base_rules(quick=False, log=print):
-    """raws/baserules.py: the octave-blended double space-time built from each named base
-    rule (classes 1-4, radii 1-3), over several rule draws.  Do the 1D rule's own
+    """The octave-blended double space-time built from each named base rule (Wolfram
+    classes 1-4, radii 1-3), over several rule draws.  Do the 1D rule's own
     statistics (lambda, gzip ratio of its space-time) predict the 3D result?  Coherence
     saturates; part count does not, but for ordered rules it swings by two orders of
     magnitude between draws, so only medians over draws mean anything."""
@@ -555,10 +557,9 @@ def base_rules(quick=False, log=print):
 
 @experiment
 def mutation_strength(quick=False, log=print):
-    """raws/sweep.py, replayed draw for draw: the double space-time with independently
-    mutated slab rules, over mutation strength, for four base rules.  Failure mode 1:
-    flipping bits raises slab-to-slab variety but cannot move density, because flips
-    preserve a rule's balance.  Also the two "siblings" (slabs seeded from the base
+    """The double space-time with independently mutated slab rules, over mutation
+    strength, for four base rules.  Flipping bits raises slab-to-slab variety but cannot
+    move density, because flips preserve a rule's balance (lambda).  Also the two "siblings" (slabs seeded from the base
     grid's rows vs its columns)."""
     n = 24 if quick else 64
     rules = ['k5_base', 'k7_phi_sync', 'k7_ga_fail', 'k7_ga_fail_062']
@@ -590,7 +591,7 @@ def mutation_strength(quick=False, log=print):
 
 @experiment
 def double_spacetime_sweep(quick=False, log=print):
-    """raws/exp12.py and alt.py: rule-space walk step, cascade seeding and a lambda band
+    """Rule-space walk step, cascade seeding and a lambda band
     in the double space-time.  Slab statistics: the slab-density series' correlation
     length, its spread ('variety'), and slabs gone empty or solid (absorbing states
     travel through cascade seeds)."""
@@ -630,7 +631,7 @@ def double_spacetime_sweep(quick=False, log=print):
 
 @experiment
 def octave_persistence(quick=False, log=print):
-    """raws/octaves.py: octave blending of the walk + cascade double space-time.
+    """Octave blending of the walk + cascade double space-time.
     Persistence is the main dial (monotone); octave count matters more than spacing;
     a hard AND of octaves throws the gradient information away."""
     def build(size, seed):
@@ -655,7 +656,7 @@ def octave_persistence(quick=False, log=print):
 
 @experiment
 def triplanar_combiners(quick=False, log=print):
-    """raws/triplanar.py: three 1D sheets combined on orthogonal planes.  Cheap, busy,
+    """Three 1D sheets combined on orthogonal planes.  Cheap, busy,
     and a texture rather than a scene: correlation length ~1 on every axis."""
     n = 32 if quick else 96
     sheets = [triplanar.sheet(r, 2, n, 'single', i) for i, r in enumerate(triplanar.DEFAULT_RULES)]
@@ -701,7 +702,7 @@ def lwd_soups(quick=False, log=print):
 
 @experiment
 def lwd_seeds(quick=False, log=print):
-    """raws/lwd_seed.py: k random cells in a 6x6 box on a dead boundary.  Which small
+    """k random cells in a 6x6 box on a dead boundary.  Which small
     seeds ignite unbounded growth?"""
     n, trials = (96, 5) if quick else (512, 40)
     rng = _rng(0)
@@ -724,7 +725,7 @@ def lwd_seeds(quick=False, log=print):
 
 @experiment
 def lwd_ladders(quick=False, log=print):
-    """raws/ladders2.py: isolating the LWD "ladders" (long, thin growth fingers).  A
+    """Isolating the LWD "ladders" (long, thin growth fingers).  A
     plain run-length test reads high on any dense blob; the thin-linear test (survives a
     line opening, destroyed by a box opening) separates ladders from bulk.  Time-based
     thresholds (excess arrival time, birth bands) were tried first."""
@@ -759,7 +760,7 @@ def lwd_ladders(quick=False, log=print):
 
 @experiment
 def hybrid_schedules(quick=False, log=print):
-    """raws/hybrid.py and multiseed.py: alternating Life without Death (fills) with Game
+    """Alternating Life without Death (fills) with Game
     of Life (hollows) makes the first true overhangs.  One GoL strike carves; two in a
     row destroy the remnant.  Several seeds ignited at staggered times collide."""
     n = 64 if quick else 128
@@ -792,7 +793,7 @@ def hybrid_schedules(quick=False, log=print):
 
 @experiment
 def lattice_gas(quick=False, log=print):
-    """raws/lgca3.py: lattice-gas DLA.  Directional particle channels build one
+    """Lattice-gas DLA.  Directional particle channels build one
     connected dendritic aggregate; the isotropic-diffusion ablation grows nothing;
     biasing a channel changes speed, not structure."""
     n, steps = (32, 150) if quick else (80, 900)
@@ -839,7 +840,7 @@ def _deposition_row(st, t, why, **extra):
 
 @experiment
 def deposition_sweep(quick=False, log=print):
-    """raws/multi3.py and hangar2.py: the frozen-deposition CA over seeding density and
+    """The frozen-deposition CA over seeding density and
     birth window, the hidden-refractory-state ablation, and the macro/micro hangar's
     chambers."""
     n, steps = (32, 40) if quick else (96, 400)
@@ -852,7 +853,7 @@ def deposition_sweep(quick=False, log=print):
     _report(log, 'seeding density x birth window (radius 3)', t,
             ['multistate + frozen deposition: density 0.10, coherence 4.17, 3,434 parts',
              'below p0 ~0.003 a random start cannot assemble enough live neighbours: '
-             'nucleation failures masquerade as dead rules (failure mode 5)'])
+             'nucleation failures masquerade as dead rules'])
     ablation = Table()
     for states in (2, 3, 5, 8, 12):        # the sweep's p0 = 0.003, birth 8-18 configuration
         st, s, why = deposition.frozen_deposition(n, 3, states, (8, 18), 10, p0=0.003, steps=steps)

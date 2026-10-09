@@ -4,8 +4,10 @@ A rule table is a 1D uint8 array whose entry i is the new state for neighbourhoo
 pattern i.  Nothing here cares what the patterns mean (1D windows, 2D Moore blocks,
 patterns plus parent context...), so one set of mutation operators serves every CA.
 
-State 0 is taken to be the quiescent state, so Langton's lambda is simply the
-fraction of table entries that output 1.
+State 0 is taken to be the quiescent state ("empty"), so Langton's lambda is simply
+the fraction of table entries that output 1.  Lambda is a rough dial for how busy a
+rule is: a table of all zeros kills everything, a table of all ones fills everything,
+and interesting behaviour sits somewhere between.  See docs/CONCEPTS.md.
 """
 import numpy as np
 
@@ -32,8 +34,9 @@ def langton_lambda(table):
 def flip_bits(table, k, rng):
     """Copy of `table` with k distinct entries inverted.
 
-    This is a *symmetric* mutation: on average it leaves lambda, and therefore output
-    density, unchanged (failure mode #1 in the handoff notes).
+    This is a *symmetric* mutation: an entry is as likely to go 0 -> 1 as 1 -> 0, so on
+    average it leaves lambda, and therefore the output density, unchanged.  Use
+    `assign_bits` to push lambda down.
     """
     out = np.array(table, dtype=np.uint8, copy=True)
     if k:

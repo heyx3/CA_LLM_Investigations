@@ -3,17 +3,19 @@
 `box_sum` efficiently counts live cells in an axis-aligned box around every voxel,
 whatever the radius (separable running sums), with independent radii per axis.
 
-Frozen deposition is a Generations-style CA:
-  0 empty, 1 alive (a travelling wavefront), 2..n_states-1 refractory (invisible),
-  FROZEN solid (permanent; the only state rendered).
-Alive cells with enough live neighbours freeze.  The load-bearing detail is the
-inhibition: frozen material *blocks* nearby ignition and freezing (`block`), so
-growth is self-limiting and dendritic instead of breeding more deposition.  The
-refractory states were ablated to have no spatial effect; they only make the
-wavefront exhaust itself.
+Frozen deposition is a multi-state ("Generations"-style) CA with large neighbourhoods:
+  0 empty, 1 alive (a travelling wavefront), 2..n_states-1 refractory (a cooldown
+  during which the cell is invisible and inert), FROZEN solid (permanent; the only
+  state rendered).
+An empty cell ignites when enough cells in its box are alive; an alive cell freezes
+when enough are alive.  Frozen material also *inhibits*: it blocks nearby ignition
+and freezing (`block`), so growth is self-limiting and branching (dendritic) instead
+of breeding more deposition.  The refractory states have no spatial effect; they only
+make the wavefront exhaust itself.
 
-`bleed` gives an in-plane neighbourhood that only sometimes sees the adjacent planes;
-recorded as a regression (noise destroys the fronts) but kept for completeness.
+`bleed` is an optional variant in which the in-plane neighbourhood only sometimes sees
+the adjacent planes.  The noise destroys the fronts, so it is kept only for
+comparison.
 """
 import numpy as np
 
@@ -56,10 +58,10 @@ def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, bloc
                       bleed=None, bleed_axis=0, saturate=None):
     """Run the deposition CA; returns (states uint8 (n, n, n), steps_run, stop_reason).
 
-    The defaults are the run behind the documented result (solid 0.101, coherence
-    4.17, 3,434 parts; found by replaying raws/multi3.py's sweep).  The seeding must
-    make the birth window reachable: the mean live count in the 7^3 box is 343 * p0,
-    so below p0 ~0.003 nothing nucleates.
+    The defaults give a solid fraction of about 0.10 at n = 96 (coherence 4.17, 3,434
+    separate parts).  The seeding must make the birth window reachable: the mean live
+    count in the 7^3 box is 343 * p0, so below p0 ~0.003 nothing nucleates (starts
+    growing) and the run looks dead.
 
     radius     int or per-axis (rx, ry, rz) box radii
     birth      (lo, hi) live-neighbour window in which an empty cell ignites

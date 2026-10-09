@@ -2,32 +2,43 @@
 
 A stack of binary lattices at decreasing resolution.  Layer 0 is the finest and is
 the one normally rendered; coarser layers exist to supply *context* to the layers
-below them.
+below them.  Layer i has `scale` s_i, meaning each of its cells covers s_i cells of
+the finest lattice in every direction (scales 1, 2, 4, 8 is typical).
 
 Each cell update reads two things:
 
 * its own neighbourhood pattern (e.g. the 3x3 Moore block, 512 patterns), and
-* one bit from each of its parent layers, sampled at the cell's position.
+* one bit from each of its parent layers (the coarser layers it listens to), taken
+  from the parent cell that covers this cell's position.
 
 The parent bits are packed into a context integer that selects which *rule bank* the
 cell uses on this step.  A layer with P parents therefore owns 2**P independent rule
-tables, stored as an array rules[context, pattern] -> new state.
+tables, stored as an array rules[context, pattern] -> new state.  Example: layer 0
+with two parents has 4 rule banks; a fine cell whose parents read (1, 0) uses bank
+0b10 = 2, and looks up its own 3x3 pattern in that bank.
 
-Wiring.  With 'all' wiring (the default and the one that worked) every layer reads
-every coarser layer directly.  'chain' wiring reads only the immediate parent; it
-was measured to sever the coarsest layer's influence on layer 0 entirely.
+Wiring.  With 'all' wiring (the default) every layer reads every coarser layer
+directly.  With 'chain' wiring a layer reads only its immediate parent, so the
+coarsest layers can reach layer 0 only indirectly and in practice lose their
+influence on it.
 
 Context bit order.  Parents are packed nearest-first, so the nearest parent is the
 most significant bit and the coarsest layer is the least significant.
 
-Scheduling.  Layer i updates on steps where t % period == phase.  With the
-staggered phases (phase = log2(period)) no two coarse layers fire on the same step,
-which avoids horizontal banding in the space-time volume.
+Scheduling.  Layer i updates on steps where t % period == phase (period defaults to
+the layer's scale, so coarse layers change slowly).  With staggered phases
+(phase = floor(log2(period))) no two layers update on the same step, which avoids
+horizontal banding in the space-time volume.  All layers that update on a step read
+the states from before that step (a synchronous update).
 
 Rotation.  The Moore rules are anisotropic, so rotating every rule bank by 90 degrees
 mid-run changes the direction structure grows in, without disturbing what has
-already been laid down.  A rotation policy decides when: RotateOnDensityLadder is
-the trigger the cityscape used; RotateEvery is the fixed-period version it replaced.
+already been laid down.  A rotation policy decides when: RotateEvery turns at fixed
+intervals; RotateOnDensityLadder turns when the coarsest layer's density has climbed
+another step.
+
+Run records ("space-time volumes") have shape (rows, cols, steps): time is the last
+axis, and frame t is the state before step t.
 """
 from dataclasses import dataclass, field
 from typing import Callable
@@ -41,6 +52,8 @@ from . import life, wolfram
 
 @dataclass(frozen=True)
 class Neighbourhood:
+    """How a layer's cells read their surroundings: the pattern encoder and the rule
+    table length that goes with it (see NEIGHBOURHOODS)."""
     name: str
     ndim: int                       # lattice dimension
     n_patterns: int                 # rule table length per context
@@ -68,13 +81,15 @@ def upsample(a, factor):
 
 @dataclass
 class Layer:
+    """One lattice of the hierarchy: its rule banks and its schedule."""
     rules: np.ndarray       # (n_contexts, n_patterns) uint8: one rule bank per context
-    scale: int = 1          # each cell covers scale x scale fine cells
+    scale: int = 1          # each cell covers scale fine cells along every axis
     period: int = 1         # update on steps where t % period == phase
     phase: int = 0
     pinned: bool = False    # never update (for influence/ablation tests)
 
     def fires(self, t):
+        """Whether this layer updates on step t."""
         return not self.pinned and t % self.period == self.phase
 
 
@@ -82,7 +97,7 @@ class Layer:
 class Spacetime:
     """The record of a run, every array at fine resolution with time on the last axis."""
     fine: np.ndarray                  # layer 0 (bool)
-    context: np.ndarray               # packed bits of layers 1.., layer 1 most significant
+    context: np.ndarray               # packed bits of layers 1.., layer 1 (the nearest parent) most significant
     layers: list | None = None        # every layer (uint8), if recorded
     rotations: list = field(default_factory=list)   # (t, quarter_turns) events
 
@@ -96,6 +111,21 @@ class Spacetime:
 # ---------------------------------------------------------------- the engine
 
 class HierarchicalCA:
+    """A stack of binary lattices in which coarse layers select the rules of finer ones.
+
+    layers        list of Layer, finest first (see the module docstring)
+    states        one initial state per layer, shape (n // scale,) * ndim; the finest
+                  state's side n must be divisible by every scale
+    neighbourhood 'moore' (2D, 512 patterns), 'totalistic' (2D, 18) or 'line' (1D, 8)
+    wiring        'all' or 'chain'
+    rotation      optional RotationPolicy
+
+        ca = HierarchicalCA(make_layers(banks, pow2_scales(4)), states)
+        record = ca.run(160)          # Spacetime; record.fine is the volume to render
+
+    `step` advances one step in place; `run` steps repeatedly and records the result.
+    """
+
     def __init__(self, layers, states, neighbourhood='moore', wiring='all', rotation=None):
         self.nb = NEIGHBOURHOODS[neighbourhood] if isinstance(neighbourhood, str) else neighbourhood
         self.layers = list(layers)
@@ -227,16 +257,17 @@ class RotateEvery(RotationPolicy):
 
 @dataclass
 class RotateOnDensityLadder(RotationPolicy):
-    """Orientation = int((density - starting density) / delta) mod 4, where density is
-    `layer`'s live fraction (default: the coarsest layer).
+    """Turn the rules each time a layer's density climbs another `delta`.
 
-    In the original runs the coarsest layer filled monotonically (~0.49 -> ~0.80), so a
-    single threshold would fire once; the ladder fires each time density gains another
-    `delta`.  Timing is emergent and seed-dependent, and because the coarse layer fills
-    fastest early, turns cluster low in the volume: a dense weave of crossing struts at
-    the base, long single-direction spans above.  delta 0.05 gave ~5 turns in 107
-    steps, 0.03 gave 7-9.  int() truncates toward zero, so densities within +-delta of
-    the start never turn; falling density turns the other way through the levels.
+    Orientation (in quarter turns) = int((density - starting density) / delta) mod 4,
+    where density is the live fraction of `layer` (default: the coarsest layer).  The
+    policy checks it after every step and turns by whatever is needed to match.
+
+    The turns are not scheduled: they happen whenever the density crosses a rung of
+    the "ladder", so their timing depends on the seed.  A layer that fills quickly
+    early on turns often early and rarely later.  int() truncates toward zero, so
+    densities within +-delta of the start never turn; falling density steps the
+    orientation the other way.
     """
     delta: float = 0.05
     layer: int = -1
@@ -256,7 +287,11 @@ class RotateOnDensityLadder(RotationPolicy):
 # ---------------------------------------------------------------- construction helpers
 
 def staggered_phase(period):
-    """log2(period) mod period: layers with periods 1, 2, 4, 8 fire at phases 0, 1, 2, 3."""
+    """floor(log2(period)), always smaller than the period and so a valid phase.
+
+    Layers with periods 1, 2, 4, 8 therefore fire at phases 0, 1, 2, 3: no two of them
+    ever update on the same step.
+    """
     return (int(period).bit_length() - 1) % period
 
 
@@ -269,16 +304,19 @@ def make_layers(rules, scales, periods=None, stagger=True):
 
 
 def pow2_scales(n_layers):
+    """[1, 2, 4, ...]: the usual layer scales, finest first."""
     return [2 ** i for i in range(n_layers)]
 
 
 def n_contexts(i, n_layers, wiring='all'):
+    """Number of rule banks layer i needs: 2 ** (its number of parents)."""
     if wiring == 'chain':
         return 2 if i < n_layers - 1 else 1
     return 2 ** (n_layers - 1 - i)
 
 
 def random_banks(n_ctx, n_patterns, rng, p_one=0.5):
+    """`n_ctx` random rule tables of `n_patterns` entries, each entry 1 with prob p_one."""
     return (rng.random((n_ctx, n_patterns)) < p_one).astype(np.uint8)
 
 
@@ -293,12 +331,13 @@ def banks_from_plan(pools, plan, rng):
 
 
 def from_interleaved(table, n_patterns):
-    """Convert the raws' flat layout tab[pattern * n_ctx + ctx] into rule banks."""
+    """Convert a flat table laid out as tab[pattern * n_ctx + ctx] into rule banks
+    shaped (n_ctx, n_patterns)."""
     table = np.asarray(table, np.uint8)
     return table.reshape(n_patterns, -1).T.copy()
 
 
 def random_states(n, scales, ndim, rng):
-    """Fair-coin initial state for every layer (drawn as the originals drew them)."""
+    """Fair-coin initial state for every layer: layer i has shape (n // scales[i],) * ndim."""
     return [rng.integers(0, 2, (n // s,) * ndim).astype(np.uint8) for s in scales]
 

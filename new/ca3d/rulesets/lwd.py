@@ -1,19 +1,25 @@
 """Life without Death (B3/S012345678) and its alternation with Game of Life.
 
-LWD never deletes a cell, so its space-time set is exactly {(x, y, t): t >= birth(x, y)}:
-a heightfield, not metaphorically.  The useful object is therefore the *birth-time
-field*, which `birth_heightfield` stands up as terrain with early arrivals tall.
+Life without Death (LWD) is Conway's Game of Life (B3/S23) with the death rule removed:
+a dead cell with exactly 3 live neighbours is born, and live cells always survive
+(B3/S012345678; see life.py for B/S notation).  Cells are never deleted, so once a
+cell is born it is a column of solid voxels all the way up in space-time: the space-time
+set is exactly {(x, y, t): t >= birth(x, y)}, a heightfield (one height per (x, y)),
+not metaphorically.  The useful object is therefore the *birth-time field*, which
+`birth_heightfield` stands up as terrain with early arrivals tall.
 
-To get real 3D structure (overhangs) LWD has to be interrupted: `hybrid_spacetime`
-alternates LWD bursts (which fill) with single Game-of-Life steps (which hollow),
-optionally from several seeds ignited at staggered times, and records for every cell
-how far into the current LWD burst it was born.
+A heightfield has no overhangs.  To get real 3D structure LWD has to be interrupted:
+`hybrid_spacetime` alternates LWD bursts (which fill) with single Game-of-Life steps
+(which hollow), optionally from several seeds ignited at staggered times, and records
+for every cell how far into the current LWD burst it was born.
+
+"Ladders" in this module are the long, thin fingers that LWD grows outward from a
+small seed.  (Unrelated to the "density ladder" rotation policy in hierarchy.py.)
 """
 import numpy as np
 from scipy import ndimage
 
 from . import life
-from ..analysis import metrics
 
 # Three live cells that ignite unbounded LWD growth ("ladders" race outward from it).
 THREE_CELL_SEED = [(1, 3), (3, 1), (3, 2)]
@@ -23,9 +29,11 @@ def birth_times(init, boundary='wrap', max_steps=5000, stop_at_edge=False):
     """Run LWD to fixation.  Returns (birth, steps_run, still_growing).
 
     birth[y, x] is the step a cell was born (0 for initial cells, -1 if never).
-    LWD does not fill the plane: dead cells that reach 4+ live neighbours can never be
-    born, leaving permanent holes.  With stop_at_edge the run halts once growth
-    reaches the grid border (for small seeds on a dead boundary).
+    "Fixation" means no cell can be born any more.  LWD does not fill the plane: a dead
+    cell with 4 or more live neighbours can never be born (births need exactly 3) and
+    nothing ever dies, so it stays a permanent hole.  With stop_at_edge the run halts
+    once growth reaches the grid border (for small seeds on a dead boundary).
+    `still_growing` is True when the run stopped early rather than at fixation.
     """
     g = np.asarray(init, bool).copy()
     birth = np.where(g, 0, -1).astype(np.int32)
@@ -41,6 +49,7 @@ def birth_times(init, boundary='wrap', max_steps=5000, stop_at_edge=False):
 
 
 def soup(n, density, rng):
+    """A random "soup": n x n bool grid, each cell alive with probability `density`."""
     return rng.random((n, n)) < density
 
 
@@ -54,6 +63,7 @@ def small_seed(n, k, rng, box=6):
 
 
 def plant(g, row, col, pattern=THREE_CELL_SEED):
+    """Switch on the cells of `pattern` ((dr, dc) offsets) relative to (row, col), in place."""
     for dr, dc in pattern:
         g[row + dr, col + dc] = True
 
@@ -89,18 +99,6 @@ def heightfield_volume(heights, depth=None, thickness=None):
     if thickness is not None:
         solid &= z > h - thickness
     return solid
-
-
-def line_opening(mask, length):
-    """Cells belonging to horizontal or vertical runs of at least `length`."""
-    return metrics.long_runs(mask, length)
-
-
-def thin_linear(mask, length=8, square=4):
-    """Long in one axis AND thin in the other: survives a line opening but not a square
-    opening.  This is what an LWD ladder is; a plain line opening is satisfied by any
-    dense blob."""
-    return metrics.thin_linear(mask, length, square)
 
 
 # ---------------------------------------------------------------- LWD / GoL hybrid
