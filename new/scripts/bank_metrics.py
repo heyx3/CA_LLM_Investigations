@@ -42,8 +42,8 @@ settling were tried too and dropped: neither had a consistent visible effect.
 --cityscape tests them on the cityscape's design.  First, rule draws whose every slot
 holds one of the --near pool members nearest the reference cityscape's own bank in
 slider space; then, for each group of slots, one slider swept from 0 to 1 with
-everything else exactly the reference.  It uses scripts/search_hierarchies.py for the
-city measures, bands, renders and contact sheets.
+everything else exactly the reference.  Cities are measured and judged as
+analysis/cities.py does for scripts/search_hierarchies.py.
 
     python scripts/bank_metrics.py --cityscape
 
@@ -110,19 +110,20 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 from scipy.stats import norm, rankdata
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import search_hierarchies as sh      # noqa: E402  city measures, bands, renders, contact sheets
-from ca3d.analysis import banks, search                                # noqa: E402
+from ca3d.analysis import banks, cities, metrics, search               # noqa: E402
 from ca3d.analysis.search import Criterion                             # noqa: E402
-from ca3d.render3D.render import Camera, Lighting, cut_octant, render, save_png  # noqa: E402
+from ca3d.render3D import sheets                                       # noqa: E402
+from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
 from ca3d.rulesets import cityscape as city, families                  # noqa: E402
+from ca3d.rulesets.design import slot_name                             # noqa: E402
 
 OUT = ROOT / 'out' / 'bank_metrics'
+HIER_SEARCH = ROOT / 'out' / 'hier_search'      # scripts/search_hierarchies.py's output
 
 
 # ---------------------------------------------------------------- measures of one bank
@@ -149,16 +150,8 @@ def blink(trial):
 
 
 def spindly(trial):
-    """Share of the final state's live cells with at most one live neighbour (of 8):
-    isolated cells and one-cell wisps.  A static bank's spindly cells become one-voxel
-    vertical threads when its pattern is extruded through time."""
-    F = trial.trajectory.final.astype(bool)
-    n = np.zeros(F.shape, np.int8)
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if dy or dx:
-                n += np.roll(np.roll(F, dy, -2), dx, -1)
-    return (F & (n <= 1)).sum(axis=(-2, -1)) / np.maximum(F.sum(axis=(-2, -1)), 1)
+    """metrics.spindly of every final state (the traits' spindly, from one soup)."""
+    return metrics.spindly(trial.trajectory.final, dims=2)
 
 
 def per_soup():
@@ -307,42 +300,6 @@ def strip_members(sc, c, count):
     return order[np.round(np.linspace(0, len(order) - 1, count)).astype(int)]
 
 
-def font(size):
-    return ImageFont.load_default(size=size)
-
-
-def fit(draw, text, typeface, width):
-    """`text`, cut short with an ellipsis if it is wider than `width` pixels."""
-    if draw.textlength(text, font=typeface) <= width:
-        return text
-    while text and draw.textlength(text + '...', font=typeface) > width:
-        text = text[:-1]
-    return text + '...'
-
-
-def sheet(rows_of_entries, path, title, thumb):
-    """rows_of_entries: [(row label, [(image, line 1, line 2), ...]), ...]."""
-    background = tuple(int(255 * c ** (1 / Lighting().gamma)) for c in Lighting().background)
-    cols = max(len(e) for _, e in rows_of_entries)
-    label_h, header, row_head = 40, 40, 26
-    height = header + len(rows_of_entries) * (row_head + thumb + label_h)
-    im = Image.new('RGB', (cols * thumb, height), background)
-    draw = ImageDraw.Draw(im)
-    draw.text((10, 10), title, fill=(220, 222, 230), font=font(18))
-    y = header
-    for label, entries in rows_of_entries:
-        draw.text((8, y + 4), label, fill=(220, 222, 230), font=font(14))
-        y += row_head
-        for k, (image, *lines) in enumerate(entries):
-            with Image.open(image) as t:
-                im.paste(t.convert('RGB').resize((thumb, thumb), Image.LANCZOS), (k * thumb, y))
-            for j, line in enumerate(lines):
-                draw.text((k * thumb + 6, y + thumb + 3 + 17 * j), fit(draw, line, font(12), thumb - 10),
-                          fill=((210, 212, 220), (150, 154, 168))[j], font=font(12))
-        y += thumb + label_h
-    im.save(path)
-
-
 def render_sheets(census, scores, args, log):
     values = mask_uniform(census.values)
     jobs, layout = [], {}
@@ -365,7 +322,7 @@ def render_sheets(census, scores, args, log):
         list(pool.map(render_bank, jobs, chunksize=2))
     log(f'\n{len(jobs)} renders in {time.perf_counter() - t0:.0f}s')
     for name, rows_of_entries in layout.items():
-        sheet(rows_of_entries, OUT / 'sheets' / f'{name}.png',
+        sheets.labelled_sheet(rows_of_entries, OUT / 'sheets' / f'{name}.png',
               f'{name}: members along its first two components (own space-time volume from '
               f'the {_soup_name(name)} soup, time upward)', args.thumb)
 
@@ -412,14 +369,14 @@ GROUPS = {'dead': [(0, 0), (0, 1)], 'static': [(0, 2), (0, 3), (0, 4), (0, 5)],
 
 
 def run_city(job):
-    """job = (banks, ic_seed): the cityscape's measures (search_hierarchies)."""
+    """job = (banks, ic_seed): the cityscape's measures (analysis/cities.py)."""
     tables, seed = job
-    return sh.measure_run(city.make(tables, sh.N, ic_seed=seed), sh.N)
+    return cities.measure_run(city.make(tables, cities.N, ic_seed=seed), cities.N)
 
 
 def render_city(job):
     tables, seed, path, res = job
-    V = city.make(tables, sh.N, ic_seed=seed).run(sh.N).fine
+    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
     if V.mean() > 0.3:
         V = cut_octant(V)
     save_png(render(V, camera=Camera(res, res)), path)
@@ -458,7 +415,7 @@ def cityscape_test(args, census, family, log):
         targets.append([])
         for c, f in enumerate(layer):
             targets[l].append(families.place(f, reference[l][c], traits)[0])
-            log(f'  {sh.slot_name(l, c, len(layer)):7} {f:8} ' +
+            log(f'  {slot_name(l, c, len(layer)):7} {f:8} ' +
                 '  '.join(f'{n} {v:.2f}' for n, v in zip(SLIDERS, targets[l][c])))
 
     def nearest(f, target, rng=None):
@@ -502,11 +459,11 @@ def cityscape_test(args, census, family, log):
 
     # draws near the reference, against the unconditioned draws of the same design
     for s, row in zip(seeds, draw_rows):
-        row.update(draw=s, failed=' '.join(sh.failed_bands(row)))
+        row.update(draw=s, failed=' '.join(cities.failed_bands(row)))
     inside = sum(not r['failed'] for r in draw_rows)
     log(f'\ndraws near the reference\'s sliders (one of the {args.near} nearest members per slot): '
         f'{inside} of {len(seeds)} inside the bands')
-    plain_path = sh.OUT_ROOT / 'city_draws' / 'draws.json'
+    plain_path = HIER_SEARCH / 'city_draws' / 'draws.json'
     plain = [d['measures'] for d in json.loads(plain_path.read_text())['draws']] if plain_path.exists() else []
     if plain:
         log(f'unconditioned draws of the same design (search_hierarchies --city-draws): '
@@ -523,7 +480,7 @@ def cityscape_test(args, census, family, log):
     # the sweeps
     table = search.Table([{'group': g, 'slider': n, 'value': v, **{m: r[m] for m in
                            ('density', 'pillars', 'void', 'coherence', 'context_info')},
-                           'failed': ' '.join(sh.failed_bands(r))}
+                           'failed': ' '.join(cities.failed_bands(r))}
                           for (g, n, v, _), r in zip(sweeps, sweep_rows)])
     log('\n' + table.show(title='one slider swept per group of slots, everything else the reference '
                                 f'(reference: {city_line(ref_row)})'))
@@ -536,7 +493,7 @@ def cityscape_test(args, census, family, log):
         entries.append((out / 'renders' / f'near{s}.png', f'draw {s} near the reference',
                         'inside the bands' if not row['failed'] else f'outside: {row["failed"]}',
                         city_line(row)))
-    sh.contact_sheet(entries, out / 'sheet_draws.png',
+    sheets.contact_sheet(entries, out / 'sheet_draws.png',
                      f'cityscape design, every slot near the reference\'s sliders '
                      f'({inside} of {len(seeds)} draws inside the bands)')
     by_group = {}
@@ -545,7 +502,7 @@ def cityscape_test(args, census, family, log):
             (out / 'renders' / f'sweep_{g}_{n}_{v:.2f}.png', f'{n} {v:.2f}', city_line(row)))
     for g, rows in by_group.items():
         at = {n: np.mean([targets[l][c][SLIDERS.index(n)] for l, c in GROUPS[g]]) for n in rows}
-        sheet([(f'{n} (the reference\'s banks sit at {at[n]:.2f})', entries) for n, entries in rows.items()],
+        sheets.labelled_sheet([(f'{n} (the reference\'s banks sit at {at[n]:.2f})', entries) for n, entries in rows.items()],
               out / f'sweep_{g}.png', f'{g} slots: one slider swept from 0 to 1, everything else the '
                                       f'reference cityscape', args.thumb)
     log(f'written to {out}')
@@ -562,39 +519,6 @@ NOISE_PALETTE = [(0.80, 0.80, 0.84), (1.0, 0.62, 0.10), (0.85, 0.20, 0.85), (0.1
                  (0.95, 0.12, 0.10)]
 
 
-def face_neighbours(V):
-    """Solid face-neighbours (of 6) of every voxel: space wraps, time does not."""
-    n = np.zeros(V.shape, np.int8)
-    for ax in (0, 1):
-        n += np.roll(V, 1, ax)
-        n += np.roll(V, -1, ax)
-    n[..., 1:] += V[..., :-1]
-    n[..., :-1] += V[..., 1:]
-    return n
-
-
-def run_lengths(V):
-    """Length of the run of consecutive solid steps each voxel belongs to (0 if empty)."""
-    up, down = np.zeros(V.shape, np.int16), np.zeros(V.shape, np.int16)
-    T = V.shape[-1]
-    for t in range(T):
-        up[..., t] = ((up[..., t - 1] if t else 0) + 1) * V[..., t]
-    for t in range(T - 1, -1, -1):
-        down[..., t] = ((down[..., t + 1] if t < T - 1 else 0) + 1) * V[..., t]
-    return np.where(V, up + down - 1, 0)
-
-
-def noise_masks(V):
-    """thin: solid voxels whose solid face-neighbours all lie along one axis (or that
-    have none): one voxel thick.  Of those, hair has its neighbours only in time (a 1x1
-    vertical thread: one cell staying put) and line only along one spatial axis.
-    speckle: solid voxels touching at most one solid voxel face-on.  flicker: solid
-    voxels in a run of at most 2 steps."""
-    thin, hair, line = sh.thin_masks(V)
-    return {'thin': thin, 'hair': hair, 'line': line,
-            'speckle': V & (face_neighbours(V) <= 1), 'flicker': V & (run_lengths(V) <= 2)}
-
-
 def context_age(C):
     """Steps since each cell's context last changed."""
     age = np.zeros(C.shape, np.int16)
@@ -608,8 +532,8 @@ def noise_record(job):
     voxel counts by context (the bank that made them), by context age, and by whether
     the cell sits on a territory edge (a 4-neighbour in another context)."""
     tables, seed = job
-    st = city.make(tables, sh.N, ic_seed=seed).run(sh.N)
-    masks = noise_masks(st.fine)
+    st = city.make(tables, cities.N, ic_seed=seed).run(cities.N)
+    masks = metrics.noise_masks(st.fine)
     C = st.context
     edge = np.zeros(C.shape, bool)
     for ax in (0, 1):
@@ -618,7 +542,7 @@ def noise_record(job):
     keep = (Ellipsis, slice(SKIP, None))
     C, edge, age = C[keep], edge[keep], age[keep]
     n_ctx = len(tables[0])
-    out = {'measures': sh.measure_record(st), 'cells_by_context': np.bincount(C.ravel(), minlength=n_ctx),
+    out = {'measures': cities.measure_record(st), 'cells_by_context': np.bincount(C.ravel(), minlength=n_ctx),
            'cells_by_age': np.bincount(age.ravel(), minlength=len(AGE_EDGES))}
     for name, m in [('solid', st.fine)] + [(k, masks[k]) for k in NOISE]:
         m = m[keep]
@@ -630,8 +554,8 @@ def noise_record(job):
 
 def render_noise(job):
     tables, seed, path, res = job
-    V = city.make(tables, sh.N, ic_seed=seed).run(sh.N).fine
-    masks = noise_masks(V)
+    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
+    masks = metrics.noise_masks(V)
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
         attr[masks[name]] = k
@@ -763,7 +687,7 @@ def noise_study(args, census, family, log):
                         f'flicker {total(r, "flicker") / total(r, "solid"):.3f}'))
     with ProcessPoolExecutor(args.jobs) as pool:
         list(pool.map(render_noise, render_jobs))
-    sh.contact_sheet(entries, out / 'sheet_noise.png',
+    sheets.contact_sheet(entries, out / 'sheet_noise.png',
                      'one-voxel-thin noise: magenta hair (vertical), cyan line, red speckle, orange flicker; '
                      'the reference, the thinnest draws, then the least thin')
     log(f'written to {out}')
@@ -781,8 +705,8 @@ def render_noise_panels(job):
     noise voxels coloured (NOISE_PALETTE), and a close-up of its middle and top in the
     same colours, where single threads can be told apart."""
     tables, seed, stem, res = job
-    V = city.make(tables, sh.N, ic_seed=seed).run(sh.N).fine
-    masks = noise_masks(V)
+    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
+    masks = metrics.noise_masks(V)
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
         attr[masks[name]] = k
@@ -895,14 +819,14 @@ def hair_test(args, census, family, log):
                 else '')
         return f'{name}: hair {r["hair"]:.3f}', note or city_line(r)
 
-    sheet([(f'{letter}. {label}', [(path[(letter, i)], *caption((letter, i), name))
+    sheets.labelled_sheet([(f'{letter}. {label}', [(path[(letter, i)], *caption((letter, i), name))
                                    for i, (_, _, name) in enumerate(cells)])
            for letter, label, cells in layout],
           out / 'sheet.png', 'hair = share of solid voxels in one-voxel vertical threads (reference 0.02). '
                              'Every row changes only the 4 static banks of its cities.', args.hair_thumb)
     names = {(l, i): name for l, i, (_, _, name) in cities}
     label_of = {letter: label for letter, label, _ in layout}
-    sheet([(f'{l}. {label_of[l]}: {names[(l, i)]}, hair {measured[(l, i)]["hair"]:.3f}',
+    sheets.labelled_sheet([(f'{l}. {label_of[l]}: {names[(l, i)]}, hair {measured[(l, i)]["hair"]:.3f}',
             [(out / 'renders' / f'{l}{i}_plain.png', 'as usually rendered', ''),
              (out / 'renders' / f'{l}{i}_noise.png', 'noise coloured', 'magenta hair, cyan line, red speckle, orange flicker'),
              (out / 'renders' / f'{l}{i}_close.png', 'close-up: middle columns, top half', 'same colours')])
@@ -913,48 +837,23 @@ def hair_test(args, census, family, log):
 
 # ---------------------------------------------------------------- the dismantling test
 
-# The static bank whose material every tested bank inherits: the reference cityscape's
-# L0.011 bank (unfragmented, density about 0.66 from a dense start).
-DISMANTLE_STATIC = 'B24/S1234568 ^14,140,214,495'
-DISMANTLE_N, DISMANTLE_STEPS, DISMANTLE_SCALE = 96, 64, 8
+# The test itself is the activity trait's handover test (families.handover_run): the
+# tested bank takes over the streets of a city made of the static bank
+# families.HANDOVER_MATERIAL, whose buildings keep that static bank.
 DISMANTLE_PALETTE = [(0.25, 0.62, 0.36), (0.72, 0.30, 0.62)]      # street (tested bank), building (static)
-
-
-def dismantle_territory():
-    """The pinned coarse layer (12 x 12 cells of 8 x 8): 1 = building, 0 = street.
-    Four 24 x 24 buildings and a 16 x 16 one in the middle; streets cover 72%."""
-    t = np.zeros((DISMANTLE_N // DISMANTLE_SCALE,) * 2, np.uint8)
-    for x in (1, 7):
-        for y in (1, 7):
-            t[x:x + 3, y:y + 3] = 1
-    t[5:7, 5:7] = 1
-    return t
-
-
-def dismantle_run(table, static=None):
-    """The tested bank takes over the streets of a lattice that starts as the static
-    bank's settled pattern everywhere; the buildings keep the static bank.  Returns
-    the (n, n, steps) volume and the territory (0 street, 1 building) of every voxel."""
-    from ca3d.analysis.dynamics import Assay
-    from ca3d.rulesets import hierarchy, life
-    static = life.parse_bank(DISMANTLE_STATIC) if static is None else static
-    start = Assay(n=DISMANTLE_N, p0=0.85, steps=45, burn=40).run(families.MOORE, static[None]).final[0]
-    layers = [hierarchy.Layer(np.stack([table, static]).astype(np.uint8), 1),
-              hierarchy.Layer(np.zeros((1, 512), np.uint8), DISMANTLE_SCALE, DISMANTLE_SCALE, 0, pinned=True)]
-    st = hierarchy.HierarchicalCA(layers, [start, dismantle_territory()]).run(DISMANTLE_STEPS)
-    return st.fine, st.context
 
 
 def render_dismantle(job):
     table, stem, res = job
-    V, C = dismantle_run(table)
+    V, streets = families.handover_run(table)
+    C = np.repeat((~streets)[..., None], V.shape[-1], axis=-1).astype(np.uint8)    # 0 street, 1 building
     save_png(render(V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}.png')
     save_png(render(~V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}_flip.png')
     return stem
 
 
 def dismantle_study(args, census, family, log):
-    """Hand banks of one family the same piece of city (see DISMANTLE_STATIC) and render
+    """Hand banks of one family the same piece of city (families.handover_run) and render
     what they do with it: anchors first (the reference's banks of that family and any
     in --anchors), then a random sample of the pool."""
     import json
@@ -978,38 +877,21 @@ def dismantle_study(args, census, family, log):
         entries = [(Path(f'{s}{suffix}.png'), label, describe(t)) for (label, t), s in zip(cases, stems)]
         rows = [(f'{what}; green: streets run by the {name} bank under test, magenta: buildings (static)',
                  entries[k:k + args.dismantle_cols]) for k in range(0, len(entries), args.dismantle_cols)]
-        sheet(rows, out / f'sheet{suffix}.png',
+        sheets.labelled_sheet(rows, out / f'sheet{suffix}.png',
               f'the dismantling test: {name} banks take over the streets of a static city (time upward, '
-              f'{DISMANTLE_STEPS} steps)', args.dismantle_thumb)
+              f'{families.TRAIT_STEPS} steps)', args.dismantle_thumb)
     log(f'{len(cases)} {name} banks rendered; written to {out}')
 
 
 # ---------------------------------------------------------------- activity: one parameter for how active a bank is
 
-ACTIVITY_STARTS = (0.85, 0.5, 0.25)     # soups the settled part is judged from
-ACTIVITY_FROM = 32                      # frames from here on count (the run's second half)
-
-
-def active_share(V, mask=None):
-    """Share of cells alive at a step or the step before (anything but 'empty and
-    staying empty'), over frames ACTIVITY_FROM on; only cells in `mask` if given."""
-    a = V[..., ACTIVITY_FROM:] | V[..., ACTIVITY_FROM - 1:-1]
-    if mask is None:
-        return float(a.mean())
-    m = mask[..., ACTIVITY_FROM:]
-    return float(a[m].mean()) if m.any() else 0.0
-
-
 def activity_of(table):
-    """(settled, fed, activity) of one table: settled is the mean active share from the
-    ACTIVITY_STARTS soups, fed the active share of the streets in the dismantling test,
-    activity their mean."""
-    from ca3d.analysis.dynamics import Assay
-    settled = np.mean([active_share(Assay(n=DISMANTLE_N, p0=p0, steps=DISMANTLE_STEPS, burn=0).run(
-        families.MOORE, table[None], record=True).history[0]) for p0 in ACTIVITY_STARTS])
-    V, C = dismantle_run(table)
-    fed = active_share(V, C == 0)
-    return float(settled), fed, (float(settled) + fed) / 2
+    """(settled, fed, activity) of one table: the parts of its activity trait
+    (families.trait_parts).  settled is the mean active share from the
+    families.TRAIT_STARTS soups, fed the active share of the streets in the dismantling
+    test, activity their mean."""
+    parts = families.trait_parts(table)
+    return parts['settled'], parts['fed'], parts['activity']
 
 
 def activity_study(args, census, family, log):
@@ -1038,7 +920,7 @@ def activity_study(args, census, family, log):
     pool_values, anchor_values = values[:len(pool)], values[len(pool):]
     slider = _position(pool_values[:, 2], values[:, 2])
     log(f'activity of {len(pool)} {name} banks ({time.perf_counter() - t0:.0f}s): settled = active share from '
-        f'soups {ACTIVITY_STARTS}, fed = active share of the streets in the dismantling test, activity = their mean')
+        f'soups {families.TRAIT_STARTS}, fed = active share of the streets in the dismantling test, activity = their mean')
     for q in (10, 25, 50, 75, 90):
         log(f'  p{q}: settled {np.percentile(pool_values[:, 0], q):.3f}  fed {np.percentile(pool_values[:, 1], q):.3f}  '
             f'activity {np.percentile(pool_values[:, 2], q):.3f}')
@@ -1064,7 +946,7 @@ def activity_study(args, census, family, log):
     k, cols = args.activity_shown, args.dismantle_cols
     rows = [(f'{name} banks spread evenly along activity, low to high', entries[i:i + cols]) for i in range(0, k, cols)]
     rows += [('anchors', entries[i:i + cols]) for i in range(k, len(entries), cols)]
-    sheet(rows, out / f'{name}.png', f'{name} banks by activity (dismantling test: green streets run by the bank, '
+    sheets.labelled_sheet(rows, out / f'{name}.png', f'{name} banks by activity (dismantling test: green streets run by the bank, '
                                      f'magenta static buildings, time upward)', args.dismantle_thumb)
     log(f'written to {out}')
 
@@ -1137,7 +1019,7 @@ def dead_cap_study(args, census, family, log):
     for k, (label, _, _, _, notes) in enumerate(pairs):
         entries.append((paths[2 * k], f'{label}, as drawn', city_line(measured[2 * k])))
         entries.append((paths[2 * k + 1], f'{label}, dead capped', notes))
-    sheet([('as drawn | dead banks capped', entries[i:i + 4]) for i in range(0, len(entries), 4)],
+    sheets.labelled_sheet([('as drawn | dead banks capped', entries[i:i + 4]) for i in range(0, len(entries), 4)],
           out / 'sheet.png', f'dead banks above activity slider {args.cap} swapped for ones below it; everything else '
                              f'unchanged', args.hair_thumb)
     log(f'written to {out}')

@@ -24,9 +24,13 @@ Kinds and how `rule` is written:
                 banks written out in settings['banks'], layer by layer, as
                 [family, rule] pairs in life.format_bank notation ('B678/S3468
                 ^109,326,353,432': a B/S rule with those entries flipped).  The other
-                settings say how it is started and run: scales, n, ic_seed, start and
-                coarse_start (names in rulesets.initial.STARTS), optional periods and
-                rotation ({'every': steps} or {'ladder': delta}).  `build()` makes it.
+                settings say how it is started and run: n and ic_seed, then either
+                `design` (a rulesets.design.Design as JSON: scales, schedule, rotation,
+                coarse start and the convention its start seed is read with), or, for
+                entries saved without one, scales, start and coarse_start (names in
+                rulesets.initial.STARTS) and optional periods and rotation (text, as in
+                rulesets.design: 'every20', 'ladder0.05'), started by the 'cityscape'
+                convention.  `build()` makes it; `from_instance` writes one.
 
 render3D.scenes.from_saved(name) builds a renderable scene from an entry, and
 scripts/render_scene.py accepts saved names as well as scene names.
@@ -35,7 +39,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import numpy as np
+from . import rules
 
 CATALOGUE = Path(__file__).resolve().parents[2] / 'data' / 'saved_rules.json'
 
@@ -98,31 +102,35 @@ class Saved:
             raise ValueError(f'{self.name} is a {self.kind} entry, not a hierarchy')
         return hierarchy.parse_banks(self.settings['banks'])
 
+    def instance(self):
+        """A hierarchy entry saved with its design, as a design.Instance."""
+        from . import design
+        if 'design' not in self.settings:
+            raise ValueError(f'{self.name} was saved without a design')
+        return design.Instance(design.Design.from_json(self.settings['design']), self.banks(),
+                               self.settings['ic_seed'])
+
     def build(self, n=None, ic_seed=None):
         """A hierarchy entry as a HierarchicalCA, started as recorded unless `n` or
         `ic_seed` say otherwise."""
-        from . import cityscape, hierarchy, initial
+        from . import design
         s = self.settings
+        n = n or s['n']
+        ic_seed = s['ic_seed'] if ic_seed is None else ic_seed
+        if 'design' in s:
+            return self.instance().build(n, ic_seed)
+        scales = tuple(s['scales'])
         rotation = s.get('rotation')
-        if rotation:
+        if isinstance(rotation, dict):                  # the older {'every': 20} form
             (how, value), = rotation.items()
-            rotation = (hierarchy.RotateEvery(value) if how == 'every'
-                        else hierarchy.RotateOnDensityLadder(value))
-        coarse = s.get('coarse_start')
-        return cityscape.make(self.banks(), n or s['n'], tuple(s['scales']), rotation,
-                              s['ic_seed'] if ic_seed is None else ic_seed,
-                              initial.STARTS[s.get('start', 'blobs')],
-                              initial.STARTS[coarse] if coarse else None, s.get('periods'))
+            rotation = f'{how}{value}'
+        states = design.start_states(n, scales, ic_seed, s.get('start', 'blobs'), s.get('coarse_start'),
+                                     'cityscape')
+        return design.assemble(self.banks(), scales, states, s.get('periods'), rotation)
 
 
-def encode(table):
-    """Binary table -> hex string (np.packbits order: entry 0 is the top bit)."""
-    return np.packbits(np.asarray(table, np.uint8)).tobytes().hex()
-
-
-def decode(text, size):
-    """Hex string -> binary table of `size` entries (inverse of `encode`)."""
-    return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8))[:size].astype(np.uint8)
+encode = rules.to_hex           # a binary table as hex (np.packbits order)
+decode = rules.from_hex         # ... and back: decode(text, size)
 
 
 def load(path=CATALOGUE):
@@ -163,6 +171,15 @@ def drop(name, path=CATALOGUE):
     catalogue = load(path)
     del catalogue[name]
     _write(catalogue, path)
+
+
+def from_instance(name, instance, n, measures=None, found_by='', notes=''):
+    """A Saved hierarchy entry for a design.Instance, run on an n x n lattice."""
+    settings = {'design': instance.design.to_json(), 'n': int(n), 'ic_seed': int(instance.ic_seed),
+                'scales': list(instance.design.scales), 'banks': instance.formatted_banks()}
+    measures = {k: round(float(v), 4) for k, v in (measures or {}).items()}
+    return Saved(name, 'hierarchy', '', settings, measures, found_by,
+                 notes or f'design {instance.design.label}')
 
 
 def from_rule(name, space, table, assay=None, measures=None, found_by='', notes=''):

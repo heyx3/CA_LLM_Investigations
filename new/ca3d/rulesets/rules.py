@@ -26,6 +26,16 @@ def apply_table(table, codes):
     return table[batch, codes]
 
 
+def to_hex(table):
+    """Binary table -> hex string (np.packbits order: entry 0 is the top bit)."""
+    return np.packbits(np.asarray(table, np.uint8)).tobytes().hex()
+
+
+def from_hex(text, size):
+    """Hex string -> binary uint8 table of `size` entries (inverse of `to_hex`)."""
+    return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8))[:size].astype(np.uint8)
+
+
 def langton_lambda(table):
     """Fraction of entries producing the non-quiescent state 1."""
     return float(np.mean(table))

@@ -13,14 +13,15 @@ Two things are called "the cityscape", and they are kept apart:
 * The reference cityscape: one particular set of rule tables, REFERENCE_BANKS,
   written out below.  `make()` builds it.  It is what the gallery shows, what PROFILE
   was measured on, and what the tests and the replayed experiments pin.
-* The cityscape *design*: its plan of families.  `draw_banks(plan, seed)` draws a
-  fresh rule set in that style from the family pools.  Draws depend on how the pools
-  were built, so a seeded draw is reproducible only for one build of the pools.  (The
-  reference is draw 3 of the original pools.)
-"""
-import numpy as np
+* The cityscape *design*: its plan of families, DESIGN (a design.Design).
+  `draw_banks(plan, seed)` draws a fresh rule set in that style from the family pools.
+  Draws depend on how the pools were built, so a seeded draw is reproducible only for
+  one build of the pools.  (The reference is draw 3 of the original pools.)
 
-from . import families, hierarchy, initial
+Both follow design.py's 'cityscape' convention for turning seeds into tables and
+starting states, the order the reference was drawn in.
+"""
+from . import design, hierarchy, initial
 
 PLAN = ['dead', 'dead', 'static', 'static', 'static', 'static', 'complex', 'complex']
 
@@ -53,6 +54,9 @@ REFERENCE_BANKS = [
 ]
 SCALES = (1, 2, 4, 8)
 
+# The cityscape's design: PLAN for the fine layer, the slow family for the coarse ones.
+DESIGN = design.Design(SCALES, tuple(PLAN), ('slow',) * (len(SCALES) - 1), convention='cityscape')
+
 # What the reference cityscape measures (160^3): a target profile for searches.
 # Keys are metrics.MEASURES names: density (live fraction), pillars (share of live
 # cells in long unchanging vertical runs), void (largest empty region as a share of
@@ -71,23 +75,33 @@ def reference_banks():
     return hierarchy.parse_banks(REFERENCE_BANKS)
 
 
-def draw_banks(plan=PLAN, seed=None, scales=SCALES, pools=None, traits=None):
-    """A random rule set in the cityscape's style: the fine layer's contexts drawn from
-    the families in `plan`, the coarse layers from the slow family.  `seed` is an int
-    or a numpy Generator.  A plan entry may limit its draw by the family's sliders,
-    e.g. ('dead', {'activity': (0, 0.8)}) (see families.draw_plan).
+def reference():
+    """The reference cityscape as a design.Instance of DESIGN (started from seed 3)."""
+    return design.Instance(DESIGN, reference_banks(), 3)
 
-    The draws are made in a fixed order: every layer, layer 0 included, first draws
-    slow tables, and layer 0's are then replaced by the plan.  This is the order the
-    reference was drawn in, so existing seeds keep selecting the same rules for as long
-    as the pools are unchanged."""
-    pools = families.load_pools() if pools is None else pools
-    rng = np.random.default_rng(seed)
-    n_layers = len(scales)
-    banks = [hierarchy.banks_from_pool(pools['slow'], hierarchy.n_contexts(i, n_layers), rng)
-             for i in range(n_layers)]
-    banks[0] = families.draw_plan(plan, rng, pools, traits)
-    return banks
+
+def plan_design(plan=PLAN, scales=SCALES):
+    """The design with the fine layer's contexts drawn from the families in `plan` and
+    the coarse layers from the slow family.  A plan entry may limit its draws by the
+    family's sliders, e.g. ('dead', {'activity': (0, 0.8)}) (see families.draw_plan);
+    limits apply to every draw of their family, so entries of one family must agree."""
+    names, limits = [], {}
+    for entry in plan:
+        family, lim = (entry, {}) if isinstance(entry, str) else entry
+        if limits.setdefault(family, dict(lim)) != dict(lim):
+            raise ValueError(f'plan entries of {family} have different limits')
+        names.append(family)
+    flat = tuple((f, t, float(lo), float(hi)) for f, lim in limits.items() for t, (lo, hi) in lim.items())
+    return design.Design(tuple(scales), tuple(names), ('slow',) * (len(scales) - 1), limits=flat,
+                         convention='cityscape')
+
+
+def draw_banks(plan=PLAN, seed=None, scales=SCALES, pools=None, traits=None):
+    """A random rule set in the cityscape's style: rule draw `seed` (an int or a numpy
+    Generator) of plan_design(plan, scales).  The draws are made in the order the
+    reference was drawn in (design.py's 'cityscape' convention), so existing seeds keep
+    selecting the same rules for as long as the pools are unchanged."""
+    return plan_design(plan, scales).draw_banks(seed, pools, traits)
 
 
 def make(banks=None, n=160, scales=SCALES, rotation=None, ic_seed=3, start=initial.blobs,
@@ -97,10 +111,12 @@ def make(banks=None, n=160, scales=SCALES, rotation=None, ic_seed=3, start=initi
     banks       one (contexts, 512) table array per layer.  None: the reference
                 cityscape (REFERENCE_BANKS).  draw_banks(plan, seed) gives other rule
                 sets in the same style; any tables of the right shapes will do.
+    rotation    a hierarchy.RotationPolicy, or its text ('every20', 'ladder', ...)
     ic_seed     picks the initial states; the reference cityscape starts from 3.
     start       start(n, rng) makes layer 0's initial state (any generator from
-                rulesets.initial).  On its own this barely matters: the coarse layers
-                decide what grows where, so every start gives the same statistics.
+                rulesets.initial, or its name).  On its own this barely matters: the
+                coarse layers decide what grows where, so every start gives the same
+                statistics.
     coarse_start  also starts the coarse layers from a pattern, drawn at fine
                 resolution and block-averaged to each layer's scale (default: fair
                 coin flips).  This is what actually shapes the city (see the
@@ -111,18 +127,5 @@ def make(banks=None, n=160, scales=SCALES, rotation=None, ic_seed=3, start=initi
         if tuple(scales) != SCALES:
             raise ValueError(f'the reference cityscape has scales {SCALES}; pass banks for {tuple(scales)}')
         banks = reference_banks()
-    states = hierarchy.random_states(n, scales, 2, np.random.default_rng(ic_seed))
-    states[0] = start(n, np.random.default_rng(ic_seed))
-    if coarse_start is not None:
-        pattern = coarse_start(n, np.random.default_rng(ic_seed)).astype(np.float64)
-        for i, scale in enumerate(scales):
-            if i:
-                states[i] = (downsample(pattern, scale) >= 0.5).astype(np.uint8)
-    return hierarchy.HierarchicalCA(hierarchy.make_layers(banks, scales, periods), states,
-                                    rotation=rotation)
-
-
-def downsample(field, factor):
-    """Block mean over factor x factor blocks."""
-    n = field.shape[0] // factor
-    return field[:n * factor, :n * factor].reshape(n, factor, n, factor).mean(axis=(1, 3))
+    states = design.start_states(n, tuple(scales), ic_seed, start, coarse_start, 'cityscape')
+    return design.assemble(banks, tuple(scales), states, periods, rotation)

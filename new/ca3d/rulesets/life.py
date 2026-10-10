@@ -28,7 +28,7 @@ import re
 
 import numpy as np
 
-from .rules import apply_table
+from .rules import apply_table, from_hex, to_hex
 
 # Bit b of the neighbour byte holds the cell at (row + dy, col + dx) for the b-th
 # offset (rows increase downwards).  Laid out around the centre cell, the bits are
@@ -152,7 +152,7 @@ def format_bank(table512):
     """
     nearest, flips = nearest_bs(table512)
     if len(flips) > MAX_LISTED_FLIPS:
-        return np.packbits(np.asarray(table512, np.uint8)).tobytes().hex()
+        return to_hex(table512)
     text = format_bs(nearest)
     return text + (' ^' + ','.join(map(str, flips)) if len(flips) else '')
 
@@ -161,7 +161,7 @@ def parse_bank(text):
     """Inverse of `format_bank`: text -> 512-entry uint8 table."""
     text = text.strip()
     if re.fullmatch(r'[0-9a-fA-F]{128}', text):
-        return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8)).astype(np.uint8)
+        return from_hex(text, 512)
     rule, _, flips = text.partition('^')
     table = expand_to_moore(parse_bs(rule))
     for entry in filter(None, flips.split(',')):

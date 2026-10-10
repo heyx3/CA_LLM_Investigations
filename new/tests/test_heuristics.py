@@ -1,12 +1,15 @@
 """Known-answer tests for the heuristics (metrics), rule spaces (dynamics), the search
 machinery and the hierarchy influence tests.  Each measure is checked on arrays whose
 answer can be worked out by hand, in 2D and in 3D, and batched against unbatched."""
+import json
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 from ca3d.analysis import banks, dynamics, experiments, influence, metrics, search
 from ca3d.render3D import scenes
-from ca3d.rulesets import cityscape, families, hierarchy, life, saved, wolfram
+from ca3d.rulesets import cityscape, design, families, hierarchy, life, saved, wolfram
 
 
 def checkerboard(shape):
@@ -141,6 +144,79 @@ def test_enrichment_and_schedule_confound():
     assert metrics.schedule_confound(motif, np.arange(8) % 4 == 0) == (1.0, 0.25)
 
 
+def test_spindly():
+    X = np.zeros((10, 10), bool)
+    X[1, 1] = True                                # isolated
+    X[5:8, 5:8] = True                            # block: every cell has 3 or more neighbours
+    assert metrics.spindly(X) == pytest.approx(1 / 10)
+    X[1, 2] = True                                # now a pair: one neighbour each
+    assert metrics.spindly(X) == pytest.approx(2 / 11)
+    assert np.isnan(metrics.spindly(np.zeros((10, 10), bool)))
+
+
+# ---------------------------------------------------------------- space-time volumes
+
+def noise_volume():
+    """(16, 16, 20): a one-cell thread through all time, a 3x3 pillar, a rod of 8
+    along x in one frame, and one lone voxel."""
+    V = np.zeros((16, 16, 20), bool)
+    V[3, 3, :] = True
+    V[8:11, 8:11, :] = True
+    V[2:10, 12, 5] = True
+    V[12, 3, 10] = True
+    return V
+
+
+def test_thin_masks_and_hair():
+    V = noise_volume()
+    thin, hair, line = metrics.thin_masks(V)
+    assert hair[3, 3].all() and hair.sum() == 20
+    assert line[2:10, 12, 5].all() and line.sum() == 8
+    assert not thin[8:11, 8:11].any()
+    assert thin.sum() == 20 + 8 + 1               # the lone voxel is thin, neither hair nor line
+    assert metrics.hair_fraction(V) == pytest.approx(20 / V.sum())
+    # time first gives the same answer
+    assert metrics.hair_fraction(np.moveaxis(V, -1, 0), time_axis=0) == pytest.approx(20 / V.sum())
+
+
+def test_noise_masks():
+    V = noise_volume()
+    m = metrics.noise_masks(V)
+    assert m['flicker'].sum() == 8 + 1            # the rod and the lone voxel last one step
+    assert m['speckle'][12, 3, 10] and m['speckle'][2, 12, 5] and m['speckle'][9, 12, 5]
+    assert m['speckle'][3, 3, 0] and not m['speckle'][3, 3, 10]     # thread ends only
+    assert metrics.run_lengths(V)[3, 3, 7] == 20 and metrics.face_neighbours(V)[3, 3, 7] == 2
+
+
+def test_tilt_rise_macro():
+    T = 40
+    still = np.zeros((32, 32, T), bool)
+    still[10:14, 10:14] = True
+    sliding = np.stack([np.roll(still[..., 0], t, axis=0) for t in range(T)], axis=-1)
+    assert metrics.tilt(still) == 0
+    assert metrics.tilt(sliding) > 0.8
+    rising = np.zeros((8, 8, 30), bool)
+    rising[..., 15:] = True                       # first third empty, last third full
+    assert metrics.rise(rising) == pytest.approx(2.0)
+    assert metrics.rise(rising[..., ::-1]) == pytest.approx(-2.0)
+    half = slab((24, 24, 24), 12)                 # blocks are all-solid or all-empty
+    assert metrics.macro_contrast(half) == pytest.approx(1.0)
+    assert metrics.macro_contrast(np.ones((24, 24, 24), bool)) == 0
+    out = metrics.measure(sliding, ['hair', 'tilt', 'macro', 'rise'])
+    assert out['tilt'] == pytest.approx(metrics.tilt(sliding)) and out['rise'] == 0
+
+
+def test_context_info_and_jaccard():
+    rng = np.random.default_rng(6)
+    labels = rng.integers(0, 4, (64, 64, 32))
+    assert metrics.context_info(labels >= 2, labels) == pytest.approx(1.0)
+    assert metrics.context_info(rng.random(labels.shape) < 0.3, labels) == pytest.approx(0, abs=0.01)
+    assert metrics.context_info(np.zeros(labels.shape, bool), labels) == 0
+    a, b = labels == 0, labels == 1
+    assert metrics.jaccard(a, b) == 1 and metrics.jaccard(a, a) == 0
+    assert metrics.jaccard(np.zeros(4, bool), np.zeros(4, bool)) == 0
+
+
 def test_domain_filter_removes_a_travelling_background():
     st = wolfram.spacetime(wolfram.random_state(64, np.random.default_rng(0)),
                            wolfram.rule_table(170), 1, 32)            # pure left shift
@@ -154,7 +230,7 @@ def test_domain_filter_removes_a_travelling_background():
 def test_batched_measures_equal_per_sample(sample):
     rng = np.random.default_rng(3)
     batch = rng.random((4,) + sample) < 0.4
-    names = ['density', 'compactness', 'coherence', 'anisotropy', 'block_entropy',
+    names = ['density', 'compactness', 'spindly', 'coherence', 'anisotropy', 'block_entropy',
              'parts', 'void', 'corr_0']
     together = metrics.measure(batch, names, dims=len(sample))
     for i in range(4):
@@ -387,3 +463,53 @@ def test_saved_rules_round_trip(tmp_path):
     three = dynamics.Totalistic(ndim=3)
     saved.keep(saved.from_rule('y', three, three.parse('B5-7/S4,6')), path)
     assert saved.names(path) == ['x', 'y'] and saved.get('y', path).rule == 'B5-7/S4,6'
+
+
+# ---------------------------------------------------------------- designs and instances
+
+def same_run(a, b, steps=24):
+    """Whether two HierarchicalCAs make the same fine volume and contexts."""
+    sa, sb = a.run(steps), b.run(steps)
+    return np.array_equal(sa.fine, sb.fine) and np.array_equal(sa.context, sb.context)
+
+
+def test_cityscape_is_an_instance_of_its_design():
+    assert same_run(cityscape.reference().build(64), cityscape.make(n=64))
+    assert cityscape.DESIGN.label == '1.2.4.8 DDSSSSCC www'
+    pools = families.load_pools()
+    plan = cityscape.PLANS['4/2/2']
+    banks = cityscape.draw_banks(plan, 7, pools=pools)
+    assert same_run(cityscape.plan_design(plan).build(7, 64, pools), cityscape.make(banks, 64, ic_seed=7))
+    with pytest.raises(ValueError):             # limits apply to every draw of a family
+        cityscape.plan_design(['dead', ('dead', {'activity': (0, 0.5)})] + ['static'] * 6)
+
+
+def test_design_conventions_and_text_forms():
+    pools = families.load_pools()
+    d = design.Design((1, 2, 4), ('dead', 'static', 'grow', 'complex'), ('glide', 'slow'), slowdown=2,
+                      rotation='every20', coarse_start='rings', limits=(('dead', 'activity', 0.0, 0.8),))
+    city_like = replace(d, convention='cityscape')
+    assert same_run(d.build(4, 48, pools), d.build(4, 48, pools))
+    assert not all(np.array_equal(a, b) for a, b in zip(d.draw_banks(4, pools), city_like.draw_banks(4, pools)))
+    assert d.ic_seed_for(4) == 1004 and city_like.ic_seed_for(4) == 4
+    assert 'convention' not in d.to_json() and design.Design.from_json(d.to_json()) == d
+    assert design.Design.from_json(city_like.to_json()) == city_like
+    assert design.rotation_policy('every20').steps == 20 and design.rotation_policy('none') is None
+    assert design.rotation_policy('ladder').delta == 0.05 and design.rotation_policy('ladder0.1').delta == 0.1
+    assert design.slot_name(0, 0b110, 8) == 'L0.110' and design.slot_name(3, 0, 1) == 'L3'
+    with pytest.raises(ValueError):
+        design.Design((1, 2), ('dead',), ('slow',))           # 2 layers need 2 fine contexts
+
+
+def test_instances_save_and_rebuild_exactly(tmp_path):
+    pools = families.load_pools()
+    d = design.Design((1, 2, 4, 8), tuple(cityscape.PLAN), ('glide', 'slow', 'frozen'), coarse_start='half_plane')
+    inst = design.Instance.draw(d, 3, pools)
+    assert same_run(inst.build(64), d.build(3, 64, pools))
+    again = design.Instance.from_json(json.loads(json.dumps(inst.to_json())))
+    assert same_run(again.build(64), inst.build(64))
+    path = tmp_path / 'saved.json'
+    saved.keep(saved.from_instance('city', inst, 64, {'density': 0.2}), path)
+    entry = saved.get('city', path)
+    assert same_run(entry.build(), inst.build(64)) and same_run(entry.build(48, 9), inst.build(48, 9))
+    assert entry.settings['banks'][3][0][0] == 'frozen'

@@ -24,7 +24,7 @@ itself shifted by k cells (1 = identical, 0 = unrelated).
 Groups:
 
   occupancy   density, entropy, block_entropy, gzip_ratio
-  spatial     compactness, coherence, components, largest_void_share, autocorrelation,
+  spatial     compactness, spindly, coherence, components, largest_void_share, autocorrelation,
               correlation_length(s), anisotropy, fractal_dimension
   temporal    change_rate, pillar_fraction, overhang_fraction, and correlation_length
               along the time axis (the "temporal correlation length")
@@ -32,6 +32,9 @@ Groups:
               degenerate_slices (for layered builds such as the double space-time)
   motifs      long_runs, bulk, thin_linear, streaks, share, enrichment,
               schedule_confound, domain_filter
+  space-time  one (x, y, t) volume of a 2D CA: thin_masks, noise_masks, face_neighbours,
+              run_lengths, hair_fraction, tilt, macro_contrast, rise
+  comparison  context_info (state vs labels such as a hierarchy's contexts), jaccard
 
 MEASURES lists every scalar measure with what its values read as; `measure(X, names)`
 computes several at once.
@@ -162,6 +165,19 @@ def compactness(X, dims=None):
     axes = _sample_axes(X, dims)
     total = box3_sum(X, axes)
     return _out(((total == 0) | (total == 3 ** len(axes))).mean(axis=axes))
+
+
+def spindly(X, dims=None):
+    """Share of live cells with at most one live neighbour among the 3^d - 1 around
+    them (8 in 2D): isolated cells and one-cell wisps.  NaN where nothing is alive.  A
+    static rule's spindly cells become one-voxel vertical threads ("hair") when its
+    frozen pattern is extruded through time."""
+    X = np.asarray(X, bool)
+    axes = _sample_axes(X, dims)
+    lonely = X & (box3_sum(X, axes) - X <= 1)
+    live = X.sum(axis=axes)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return _out(np.where(live > 0, lonely.sum(axis=axes) / live, np.nan))
 
 
 def coherence(X, dims=None):
@@ -459,6 +475,136 @@ def thinness(mask, length=8, square=4, axes=None):
     return share(thin_linear(mask, length, square, axes), mask)
 
 
+# ---------------------------------------------------------------- space-time volumes of 2D CAs
+
+def _time_last_3d(V, time_axis):
+    V = np.asarray(V, bool)
+    if V.ndim != 3:
+        raise ValueError(f'expected one (x, y, t) volume, got shape {V.shape}')
+    return np.moveaxis(V, time_axis % 3, -1)
+
+
+def face_neighbours(V, time_axis=-1):
+    """Solid face-neighbours (of 6) of every voxel of a space-time volume: space wraps,
+    time does not."""
+    V = _time_last_3d(V, time_axis)
+    n = np.zeros(V.shape, np.int8)
+    for ax in (0, 1):
+        n += np.roll(V, 1, ax)
+        n += np.roll(V, -1, ax)
+    n[..., 1:] += V[..., :-1]
+    n[..., :-1] += V[..., 1:]
+    return np.moveaxis(n, -1, time_axis % 3)
+
+
+def run_lengths(V, time_axis=-1):
+    """Length of the run of consecutive solid steps each voxel belongs to (0 if empty)."""
+    V = _time_last_3d(V, time_axis)
+    up, down = np.zeros(V.shape, np.int16), np.zeros(V.shape, np.int16)
+    T = V.shape[-1]
+    for t in range(T):
+        up[..., t] = ((up[..., t - 1] if t else 0) + 1) * V[..., t]
+    for t in range(T - 1, -1, -1):
+        down[..., t] = ((down[..., t + 1] if t < T - 1 else 0) + 1) * V[..., t]
+    return np.moveaxis(np.where(V, up + down - 1, 0), -1, time_axis % 3)
+
+
+def thin_masks(V, time_axis=-1):
+    """One-voxel-thin solid: voxels whose solid face-neighbours lie along at most one
+    axis.  Returns (thin, hair, line): hair has its neighbours only in time, a 1x1
+    vertical thread (one cell staying put; the main fine noise of cityscape draws, made
+    by static banks whose frozen pattern has isolated cells); line has them only along
+    one spatial axis (e.g. the cityscape's thin horizontal fences).  Space wraps, time
+    does not."""
+    V = _time_last_3d(V, time_axis)
+    along = [np.roll(V, 1, ax) | np.roll(V, -1, ax) for ax in (0, 1)]
+    in_time = np.zeros(V.shape, bool)
+    in_time[..., 1:] |= V[..., :-1]
+    in_time[..., :-1] |= V[..., 1:]
+    thin = V & (along[0].astype(np.int8) + along[1] + in_time <= 1)
+    masks = thin, thin & in_time, thin & (along[0] | along[1])
+    return tuple(np.moveaxis(m, -1, time_axis % 3) for m in masks)
+
+
+def noise_masks(V, time_axis=-1):
+    """The kinds of fine noise voxel, as masks: thin, hair and line (`thin_masks`);
+    speckle, solid voxels touching at most one solid voxel face-on; and flicker, solid
+    voxels in a run of at most 2 steps."""
+    V = np.asarray(V, bool)
+    thin, hair, line = thin_masks(V, time_axis)
+    return {'thin': thin, 'hair': hair, 'line': line,
+            'speckle': V & (face_neighbours(V, time_axis) <= 1),
+            'flicker': V & (run_lengths(V, time_axis) <= 2)}
+
+
+def hair_fraction(V, time_axis=-1):
+    """Share of solid voxels in one-voxel vertical threads (`thin_masks`): the
+    reference cityscape 0.02, random rule draws of its design median 0.13, the hairiest
+    over 0.5."""
+    return share(thin_masks(V, time_axis)[1], V)
+
+
+def tilt(V, lag=6, reach=6, time_axis=-1):
+    """Space-time slant: the share of solid that arrived by sliding.  For frames in the
+    second half, the live cells that were not live `lag` steps earlier in place but
+    were at the best single displacement, less the average over displacements (chance).
+    0 for upright or churning structure, toward 1 when everything slides one way."""
+    V = _time_last_3d(V, time_axis)
+    T = V.shape[-1]
+    frames = np.arange(T // 2, T - lag, 6)
+    now = np.moveaxis(V[..., frames + lag], -1, 0)
+    before = np.moveaxis(V[..., frames], -1, 0)
+    live = np.maximum(now.sum(axis=(-2, -1)), 1)[..., None]
+    moved = overlaps(now & ~before, before, reach)[..., 1:] / live
+    return float((moved.max(axis=-1) - moved.mean(axis=-1)).mean())
+
+
+def macro_contrast(V, blocks=12):
+    """Spread of the density of (n / blocks)^3 blocks relative to a single voxel's: ~0
+    when material is spread evenly, larger when it gathers into districts.  V is one
+    (n, n, T) volume."""
+    V = np.asarray(V, bool)
+    b = V.shape[0] // blocks
+    t = V.shape[-1] // b * b
+    means = V[:blocks * b, :blocks * b, :t].reshape(blocks, b, blocks, b, -1, b).mean(axis=(1, 3, 5))
+    p = V.mean()
+    return float(means.std() / np.sqrt(p * (1 - p))) if 0 < p < 1 else 0.0
+
+
+def rise(V, time_axis=-1):
+    """(density of the last third of the run - the first third) / mean density: positive
+    when the structure gets denser with height, negative when it thins out."""
+    V = np.moveaxis(np.asarray(V, bool), time_axis, -1)
+    T = V.shape[-1]
+    p = V.mean()
+    return float((V[..., -T // 3:].mean() - V[..., :T // 3].mean()) / p) if p else 0.0
+
+
+# ---------------------------------------------------------------- labels and comparisons
+
+def context_info(X, labels):
+    """Mutual information between a cell's state and its label (for a hierarchy: the
+    coarse context), as a share of the cell state's entropy.  0: the labels make no
+    difference to what is solid; 1: the label alone says what is solid."""
+    c = np.asarray(labels, np.int64).ravel()
+    x = np.asarray(X, np.int64).ravel()
+    joint = np.bincount(c * 2 + x, minlength=2 * (int(c.max()) + 1)).reshape(-1, 2) / c.size
+
+    def h(p):
+        p = p[p > 0]
+        return float(-(p * np.log2(p)).sum())
+    h_x = h(joint.sum(axis=0))
+    return (h_x + h(joint.sum(axis=1)) - h(joint.ravel())) / h_x if h_x else 0.0
+
+
+def jaccard(a, b):
+    """Cells solid in exactly one of two arrays, over cells solid in either: 0
+    identical, toward 1 unrelated (two unrelated cityscapes differ by about 0.85)."""
+    a, b = np.asarray(a, bool), np.asarray(b, bool)
+    either = int((a | b).sum())
+    return float((a ^ b).sum() / either) if either else 0.0
+
+
 def enrichment(motif, labels, n_labels=None, within=None):
     """How strongly a motif concentrates in each label (context, rule, region).
 
@@ -532,6 +678,8 @@ MEASURES = {
                     'compressed size vs the same cells shuffled; ~0 ordered, 1 noise', batched=False),
     'compactness': Measure(compactness, '<0.2 speckle, 0.4-0.7 regions with detail, >0.9 blobs'),
     'coherence': Measure(coherence, '1.0 noise, >2 clustered; saturates under octave blending'),
+    'spindly': Measure(spindly, 'share of live cells with <=1 live neighbour; NaN if empty; '
+                       'a static pattern\'s spindly cells extrude into hair'),
     'components': Measure(components, 'part count / median size / largest share (>0.9: percolating)',
                           batched=False, outputs=('parts', 'median_part', 'largest_part')),
     'void': Measure(largest_void_share, 'largest empty region / array size (cityscape 0.80)',
@@ -552,6 +700,14 @@ MEASURES = {
                          temporal=True),
     'streaks': Measure(streak_fraction, 'share in horizontal streaks (cityscape 0.029)',
                        batched=False, temporal=True),
+    'hair': Measure(hair_fraction, 'share in one-voxel vertical threads; cityscape 0.02, '
+                    'over ~0.15 reads as fine noise', batched=False, temporal=True),
+    'tilt': Measure(tilt, 'share of solid that arrived by sliding; 0 upright, toward 1 slanted',
+                    batched=False, temporal=True),
+    'macro': Measure(macro_contrast, 'block density spread vs a voxel\'s; ~0 even, larger in districts',
+                     batched=False),
+    'rise': Measure(rise, '(last third - first third density) / density; >0 denser with height',
+                    batched=False, temporal=True),
 }
 
 # output name -> measure that produces it

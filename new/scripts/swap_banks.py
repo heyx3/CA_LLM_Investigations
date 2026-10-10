@@ -57,14 +57,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                            # noqa: E402
+from ca3d.render3D import sheets                                     # noqa: E402
 from ca3d.render3D.render import Camera, Lighting, render, save_png   # noqa: E402
 from ca3d.rulesets import cityscape as city, families                 # noqa: E402
+from ca3d.rulesets.design import slot_name                            # noqa: E402
 
 MEASURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'parts', 'largest_part',
             'change', 'corr_time')
@@ -83,9 +85,6 @@ HUES = {(0, 0): 0.58, (0, 1): 0.36, (1, 0): 0.97, (1, 1): 0.12}
 SATURATION = {0: 0.25, 1: 1.0}          # by layer 1's bit
 N_COARSE = 3                            # layers 1-3 (scales 2, 4, 8)
 
-SHEET_BACKGROUND = tuple(int(255 * c ** (1 / Lighting().gamma)) for c in Lighting().background)
-SHEET_TEXT = (220, 222, 230)
-SHEET_DIM = (150, 154, 168)
 
 
 # ---------------------------------------------------------------- slots and edits
@@ -100,8 +99,7 @@ class Slot:
 
     @property
     def name(self):
-        bits = format(self.context, f'0{self.n_parents}b') if self.n_parents else ''
-        return f'L{self.layer}.{bits}' if bits else f'L{self.layer}'
+        return slot_name(self.layer, self.context, 2 ** self.n_parents)
 
 
 @dataclass(frozen=True)
@@ -196,16 +194,10 @@ def run_job(job):
     row = {k: float(v) for k, v in metrics.measure(st.fine, MEASURES).items()}
     for j, state in enumerate(ca.states[1:], 1):
         row[f'L{j}_final'] = float(state.mean())
-    row['jaccard'] = jaccard(st.fine, st.fine if edit is None else unswapped(ic_seed))
+    row['jaccard'] = metrics.jaccard(st.fine, st.fine if edit is None else unswapped(ic_seed))
     if image is not None:
         save_png(render_by_layers(st, _CONFIG['res']), image)
     return row
-
-
-def jaccard(a, b):
-    """Voxels solid in exactly one of two volumes, over voxels solid in either."""
-    either = int((a | b).sum())
-    return float((a ^ b).sum() / either) if either else 0.0
 
 
 def exposure(ca, steps):
@@ -242,46 +234,22 @@ def render_by_layers(st, res):
     return render(st.fine, st.context, linear, camera=Camera(res, res))
 
 
-def font(size):
-    return ImageFont.load_default(size=size)
-
-
 def legend():
     """Swatches of the eight coarse contexts: columns by (layer 3, layer 2), rows by layer 1."""
-    pal, small = palette(), font(13)
+    pal, small = palette(), sheets.font(13)
     sw_w, sw_h, col_w, left = 104, 26, 124, 48
-    img = Image.new('RGB', (left + 4 * col_w, 20 + 2 * (sw_h + 4)), SHEET_BACKGROUND)
+    img = Image.new('RGB', (left + 4 * col_w, 20 + 2 * (sw_h + 4)), sheets.BACKGROUND)
     draw = ImageDraw.Draw(img)
     for h, (l3, l2) in enumerate(HUES):
         x = left + h * col_w
-        draw.text((x, 0), f'L3={l3}  L2={l2}', fill=SHEET_DIM, font=small)
+        draw.text((x, 0), f'L3={l3}  L2={l2}', fill=sheets.DIM, font=small)
         for l1 in (0, 1):
             y = 20 + l1 * (sw_h + 4)
             colour = tuple(int(255 * v) for v in pal[l1 << 2 | l2 << 1 | l3])
             draw.rectangle([x, y, x + sw_w, y + sw_h], fill=colour)
     for l1 in (0, 1):
-        draw.text((0, 20 + l1 * (sw_h + 4) + 6), f'L1={l1}', fill=SHEET_DIM, font=small)
+        draw.text((0, 20 + l1 * (sw_h + 4) + 6), f'L1={l1}', fill=sheets.DIM, font=small)
     return img
-
-
-def contact_sheet(entries, path, title, thumb):
-    """entries: [(image path, first line, second line)], laid out in reading order."""
-    cols = min(8, max(4, math.ceil(math.sqrt(len(entries)))))
-    rows = math.ceil(len(entries) / cols)
-    key = legend()
-    label_h, header = 40, 44 + key.height + 12
-    width = max(cols * thumb, key.width + 20, int(ImageDraw.Draw(key).textlength(title, font(20))) + 20)
-    sheet = Image.new('RGB', (width, header + rows * (thumb + label_h)), SHEET_BACKGROUND)
-    draw = ImageDraw.Draw(sheet)
-    draw.text((10, 10), title, fill=SHEET_TEXT, font=font(20))
-    sheet.paste(key, (10, 44))
-    for k, (image, line1, line2) in enumerate(entries):
-        x, y = (k % cols) * thumb, header + (k // cols) * (thumb + label_h)
-        with Image.open(image) as im:
-            sheet.paste(im.convert('RGB').resize((thumb, thumb), Image.LANCZOS), (x, y))
-        draw.text((x + 6, y + thumb + 3), line1, fill=SHEET_TEXT, font=font(14))
-        draw.text((x + 6, y + thumb + 21), line2, fill=SHEET_DIM, font=font(12))
-    sheet.save(path)
 
 
 # ---------------------------------------------------------------- tables
@@ -448,7 +416,7 @@ def main():
         r['shift'] = since.distance(r)
         r['profile_distance'] = profile.distance(r)
     floor = [r['shift'] for r in base]
-    unrelated = [jaccard(unswapped(a), unswapped(b)) for a, b in itertools.combinations(ic_seeds, 2)]
+    unrelated = [metrics.jaccard(unswapped(a), unswapped(b)) for a, b in itertools.combinations(ic_seeds, 2)]
 
     text = ['swap', 'kind', 'a', 'b', 'families', 'layers']
     means = mean_over_starts(runs, text)
@@ -496,9 +464,10 @@ def main():
                                  f'jacc {r["jaccard"]:.2f}  shift {r["shift"]:.2f}  '
                                  f'dens {r["density"]:.3f}') for r in group]
             name = kind.replace(', ', '_').replace(' ', '-')
-            contact_sheet(entries, out / f'sheet_{name}.png',
-                          f'{kind} ({args.mode}, {args.rules}, start {ic_seeds[0]}), '
-                          'least to most shifted', args.thumb)
+            cols = min(8, max(4, math.ceil(math.sqrt(len(entries)))))
+            sheets.contact_sheet(entries, out / f'sheet_{name}.png',
+                                 f'{kind} ({args.mode}, {args.rules}, start {ic_seeds[0]}), '
+                                 'least to most shifted', args.thumb, cols, key=legend())
     print(f'written to {out}')
 
 

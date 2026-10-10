@@ -4,7 +4,7 @@ constructions built from them.
 Suggested reading order: rules, wolfram, life, hierarchy, cityscape.  Terms are
 explained in docs/CONCEPTS.md.
 
-Dependencies: most modules here are self-contained.  `families` (and so `cityscape`)
+Dependencies: most modules here are self-contained.  `families` (and so `design` and `cityscape`)
 and `saved` also use `ca3d.analysis`, because a rule family is defined by how a rule
 measures when run, not by its table.  `analysis` in turn builds on this package's
 rule engines, so the two packages depend on each other in that one place.
@@ -13,6 +13,7 @@ rule engines, so the two packages depend on each other in that one place.
   wolfram           1D binary CAs of any radius
   life              2D B/S and 512-entry Moore rules, expansion, rule rotation
   hierarchy         the hierarchical (multi-octave) CA engine and rotation policies
+  design            hierarchies described by families (Design) and one draw of them (Instance)
   families          dead / static / slow / edge / complex rule pools
   cityscape         the cityscape configuration and its measured profile
   initial           initial conditions: blobs, uniform, sparse points, rings, ...

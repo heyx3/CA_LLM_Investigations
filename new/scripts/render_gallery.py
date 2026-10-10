@@ -12,27 +12,14 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import metrics                     # noqa: E402
-from ca3d.render3D import scenes                      # noqa: E402
+from ca3d.render3D import scenes, sheets              # noqa: E402
 from ca3d.render3D.render import Camera, save_png    # noqa: E402
 from ca3d.rulesets import saved                       # noqa: E402
-
-
-def contact_sheet(paths, out, thumb=300, cols=4):
-    rows = -(-len(paths) // cols)
-    sheet = Image.new('RGB', (cols * thumb, rows * (thumb + 22)), (20, 21, 28))
-    draw = ImageDraw.Draw(sheet)
-    for k, path in enumerate(paths):
-        img = Image.open(path).convert('RGB')
-        img.thumbnail((thumb, thumb))
-        x, y = (k % cols) * thumb, (k // cols) * (thumb + 22)
-        sheet.paste(img, (x + (thumb - img.width) // 2, y))
-        draw.text((x + 6, y + thumb + 4), path.stem, fill=(220, 220, 220))
-    sheet.save(out)
 
 
 def main():
@@ -73,7 +60,8 @@ def main():
 
     # the sheet shows every scene rendered so far, not just this run's
     everything = [args.out / f'{n}.png' for n in catalogue + ([] if args.saved else ['hierarchy_1d'])]
-    contact_sheet([p for p in everything if p.exists()], args.out / 'contact_sheet.png')
+    sheets.contact_sheet([(p, p.stem) for p in everything if p.exists()], args.out / 'contact_sheet.png',
+                         'saved rules' if args.saved else 'every scene', thumb=300)
     print('wrote', len(written), 'images and', args.out / 'contact_sheet.png')
 
 

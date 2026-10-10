@@ -5,6 +5,7 @@
   search       bands, staged pipelines, samplers, target profiles, sweeps, tables
   banks        a census of a rule set: every rule measured once, kept as a table
   influence    coupling tests for the hierarchy: pinning, perturbation, sensitivity
+  cities       judging a hierarchy's run as a city: its measures and bands
   experiments  named, re-runnable experiments, each asking one question
 
 The vocabulary (lambda, soup, damage spreading, bands...) is in docs/CONCEPTS.md.

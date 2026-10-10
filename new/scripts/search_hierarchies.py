@@ -59,6 +59,11 @@ rule draw: its tables and starting state) instead of on designs:
     python scripts/search_hierarchies.py --instances run1:h0053:2,3 around_h0071:v0066:2
     python scripts/search_hierarchies.py --instances @out/hier_search/picks2.txt --tag round2
 
+--keep saves one of them, by the same specs, to the catalogue (rulesets/saved.py,
+data/saved_rules.json), where render_scene.py and render_gallery.py --saved find it:
+
+    python scripts/search_hierarchies.py --keep round2:h0053@2 terraces --notes "..."
+
 It makes changes much smaller than a design mutation (a fresh start with the rules
 kept, one bank redrawn from its own family, 1-8 table entries flipped) and combines
 the liked instances (coarse layers of one under the fine layer of another; another
@@ -68,7 +73,7 @@ variants is rendered.  Kept instances go to instances.json and can be liked in t
 ('RUN:NAME').
 
 Design labels read `scales | fine plan | coarse families | options`, one letter per
-family (FAMILY_CODES).  The cityscape's design is `1.2.4.8 DDSSSSCC www`.
+family (design.FAMILY_CODES).  The cityscape's design is `1.2.4.8 DDSSSSCC www`.
 
 Output (out/hier_search/<tag>/): summary.txt, designs.json (every confirmed design
 with its measures and cluster), runs.csv (one row per run), sheet.png and renders/.
@@ -84,32 +89,29 @@ import sys
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                              # noqa: E402
+from ca3d.analysis.cities import BANDS, LOOSE_BANDS, N, failed_bands, measure_record, measure_run  # noqa: E402
 from ca3d.analysis.search import Band                                  # noqa: E402
-from ca3d.render3D.render import Camera, Lighting, cut_octant, render, save_png  # noqa: E402
-from ca3d.rulesets import cityscape as city, families, hierarchy, initial  # noqa: E402
+from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
+from ca3d.render3D.sheets import contact_sheet                         # noqa: E402
+from ca3d.rulesets import cityscape as city, families, hierarchy, saved  # noqa: E402
+from ca3d.rulesets.design import Design, slot_name                     # noqa: E402
+from ca3d.rulesets.design import Instance as DrawnInstance             # noqa: E402
 from ca3d.rulesets.rules import flip_bits                              # noqa: E402
 
 OUT_ROOT = ROOT / 'out' / 'hier_search'
 
-N = 144             # lattice edge and run length: divisible by every scale in SCALE_SETS
-
 
 # ---------------------------------------------------------------- families
 
-# One letter per family (rulesets/families.py) in design labels: upper case for the
-# fine layer's families, lower case for the coarse layers'.
-FAMILY_CODES = {'dead': 'D', 'static': 'S', 'complex': 'C', 'edge': 'E', 'erode': 'R',
-                'grow': 'G', 'drift': 'X', 'slow': 'w', 'frozen': 'f', 'glide': 'g'}
 FINE_FAMILIES = ('dead', 'static', 'complex', 'edge', 'erode', 'grow', 'drift')
 COARSE_FAMILIES = ('slow', 'frozen', 'glide')
 VOID_MAKERS = ('dead', 'erode')                 # every plan needs one: something to see past
@@ -167,245 +169,57 @@ def pick(rng, weighted):
     return keys[rng.choice(len(keys), p=p / p.sum())]
 
 
-@dataclass(frozen=True)
-class Design:
-    """A hierarchical CA described by families, not tables.
-
-    scales        layer scales, finest first (all-parents wiring)
-    plan          the fine layer's family for each context (2 ** (layers - 1) of them)
-    coarse        each coarse layer's family, layer 1 first
-    slowdown      coarse layer i updates every scale_i * slowdown steps
-    rotation      'none', 'every20', 'every40' (RotateEvery) or 'ladder'
-                  (RotateOnDensityLadder(0.05) on the coarsest layer)
-    coarse_start  'coin' (fair coin flips) or an initial.STARTS pattern, block-averaged
-                  to each coarse layer's scale
-    limits        (family, trait, lo, hi) slider limits on every draw from that family,
-                  e.g. DEAD_LIMIT; designs saved before limits existed have none
-    """
-    scales: tuple
-    plan: tuple
-    coarse: tuple
-    slowdown: int = 1
-    rotation: str = 'none'
-    coarse_start: str = 'coin'
-    limits: tuple = ()
-
-    @property
-    def label(self):
-        parts = ['.'.join(map(str, self.scales)),
-                 ''.join(FAMILY_CODES[f] for f in self.plan),
-                 ''.join(FAMILY_CODES[f] for f in self.coarse)]
-        if self.slowdown > 1:
-            parts.append(f'slow x{self.slowdown}')
-        if self.rotation != 'none':
-            parts.append(self.rotation)
-        if self.coarse_start != 'coin':
-            parts.append(self.coarse_start)
-        parts += [f'{FAMILY_CODES[f]} {t[:3]}{lo:g}-{hi:g}' for f, t, lo, hi in self.limits]
-        return ' '.join(parts)
-
-    def limits_for(self, family):
-        """{trait: (lo, hi)} on this family's draws."""
-        return {t: (lo, hi) for f, t, lo, hi in self.limits if f == family}
-
-    def rotation_policy(self):
-        if self.rotation == 'none':
-            return None
-        if self.rotation == 'ladder':
-            return hierarchy.RotateOnDensityLadder(0.05)
-        return hierarchy.RotateEvery(int(self.rotation.removeprefix('every')))
-
-    def build(self, seed, n, pools):
-        """The HierarchicalCA for rule draw `seed`: every bank drawn from its slot's
-        family pool, layer 0 starting from blobs, the coarse layers from coarse_start."""
-        return self.assemble(self.draw_banks(seed, pools), self.start_states(seed + 1000, n))
-
-    def family(self, layer, context):
-        """The family the bank in this slot is drawn from."""
-        return self.plan[context] if layer == 0 else self.coarse[layer - 1]
-
-    def draw_banks(self, seed, pools):
-        """Rule draw `seed`: one table per slot, from the slot's family pool (within the
-        design's limits).  Without limits this is the draw designs always made."""
-        rng = np.random.default_rng(seed)
-        n_layers = len(self.scales)
-        traits = traits_of(pools) if self.limits else None
-        plan = [(f, self.limits_for(f)) if self.limits_for(f) else f for f in self.plan]
-        banks = [families.draw_plan(plan, rng, pools, traits)]
-        for i, family in enumerate(self.coarse, 1):
-            n_ctx = hierarchy.n_contexts(i, n_layers)
-            if self.limits_for(family):
-                banks.append(families.draw_plan([(family, self.limits_for(family))] * n_ctx, rng, pools, traits))
-            else:
-                banks.append(hierarchy.banks_from_pool(pools[family], n_ctx, rng))
-        return banks
-
-    def start_states(self, ic_seed, n):
-        """Initial states: layer 0 from blobs, the coarse layers from coarse_start."""
-        ic = np.random.default_rng(ic_seed)
-        states = hierarchy.random_states(n, self.scales, 2, ic)
-        states[0] = initial.blobs(n, ic)
-        if self.coarse_start != 'coin':
-            pattern = initial.STARTS[self.coarse_start](n, ic).astype(np.float64)
-            for i, scale in enumerate(self.scales[1:], 1):
-                states[i] = (city.downsample(pattern, scale) >= 0.5).astype(np.uint8)
-        return states
-
-    def assemble(self, banks, states):
-        periods = [1] + [s * self.slowdown for s in self.scales[1:]]
-        return hierarchy.HierarchicalCA(hierarchy.make_layers(banks, self.scales, periods), states,
-                                        rotation=self.rotation_policy())
-
-    @classmethod
-    def random(cls, rng):
-        """A design from the prior: family mix drawn per design (so plans range from
-        one dominant family to an even mix), at least one void-maker and one
-        structure-maker in the plan."""
-        scales = pick(rng, SCALE_SETS)
-        n_ctx = 2 ** (len(scales) - 1)
-        while True:
-            weights = rng.dirichlet(np.full(len(FINE_FAMILIES), 0.7))
-            plan = tuple(FINE_FAMILIES[k] for k in rng.choice(len(FINE_FAMILIES), n_ctx, p=weights))
-            if any(f in plan for f in VOID_MAKERS) and any(f in plan for f in STRUCTURE_MAKERS):
-                break
-        coarse = tuple(pick(rng, COARSE_WEIGHTS) for _ in scales[1:])
-        limits = (DEAD_LIMIT,) if 'dead' in plan and rng.random() < LIMITED_SHARE else ()
-        return cls(scales, plan, coarse, pick(rng, SLOWDOWNS), pick(rng, ROTATIONS),
-                   pick(rng, COARSE_STARTS), limits)
-
-    def mutate(self, rng):
-        """The same design with one thing changed (scales are kept)."""
-        what = rng.choice(['plan', 'plan', 'plan', 'swap', 'coarse', 'slowdown', 'rotation', 'start', 'limits'])
-        if what in ('plan', 'swap'):
-            plan = list(self.plan)
-            i, j = rng.choice(len(plan), 2, replace=False)
-            if what == 'swap':
-                plan[i], plan[j] = plan[j], plan[i]
-            else:
-                plan[i] = str(rng.choice([f for f in FINE_FAMILIES if f != plan[i]]))
-            return replace(self, plan=tuple(plan))
-        if what == 'coarse':
-            coarse = list(self.coarse)
-            i = rng.integers(len(coarse))
-            coarse[i] = str(rng.choice([f for f in COARSE_FAMILIES if f != coarse[i]]))
-            return replace(self, coarse=tuple(coarse))
-        if what == 'slowdown':
-            return replace(self, slowdown=3 - self.slowdown)
-        if what == 'rotation':
-            return replace(self, rotation=str(rng.choice([r for r in ROTATIONS if r != self.rotation])))
-        if what == 'limits':
-            return replace(self, limits=() if self.limits else (DEAD_LIMIT,))
-        return replace(self, coarse_start=str(rng.choice([s for s in COARSE_STARTS if s != self.coarse_start])))
-
-    def to_json(self):
-        return asdict(self)
-
-    @classmethod
-    def from_json(cls, d):
-        return cls(tuple(d['scales']), tuple(d['plan']), tuple(d['coarse']), d['slowdown'],
-                   d['rotation'], d['coarse_start'], tuple(tuple(x) for x in d.get('limits', ())))
+def random_design(rng):
+    """A design from the prior: family mix drawn per design (so plans range from
+    one dominant family to an even mix), at least one void-maker and one
+    structure-maker in the plan."""
+    scales = pick(rng, SCALE_SETS)
+    n_ctx = 2 ** (len(scales) - 1)
+    while True:
+        weights = rng.dirichlet(np.full(len(FINE_FAMILIES), 0.7))
+        plan = tuple(FINE_FAMILIES[k] for k in rng.choice(len(FINE_FAMILIES), n_ctx, p=weights))
+        if any(f in plan for f in VOID_MAKERS) and any(f in plan for f in STRUCTURE_MAKERS):
+            break
+    coarse = tuple(pick(rng, COARSE_WEIGHTS) for _ in scales[1:])
+    limits = (DEAD_LIMIT,) if 'dead' in plan and rng.random() < LIMITED_SHARE else ()
+    return Design(scales, plan, coarse, pick(rng, SLOWDOWNS), pick(rng, ROTATIONS),
+                  pick(rng, COARSE_STARTS), limits)
 
 
-CITYSCAPE_DESIGN = Design((1, 2, 4, 8), tuple(city.PLAN), ('slow', 'slow', 'slow'))
+def mutate(design, rng):
+    """The same design with one thing changed (scales are kept)."""
+    what = rng.choice(['plan', 'plan', 'plan', 'swap', 'coarse', 'slowdown', 'rotation', 'start', 'limits'])
+    if what in ('plan', 'swap'):
+        plan = list(design.plan)
+        i, j = rng.choice(len(plan), 2, replace=False)
+        if what == 'swap':
+            plan[i], plan[j] = plan[j], plan[i]
+        else:
+            plan[i] = str(rng.choice([f for f in FINE_FAMILIES if f != plan[i]]))
+        return replace(design, plan=tuple(plan))
+    if what == 'coarse':
+        coarse = list(design.coarse)
+        i = rng.integers(len(coarse))
+        coarse[i] = str(rng.choice([f for f in COARSE_FAMILIES if f != coarse[i]]))
+        return replace(design, coarse=tuple(coarse))
+    if what == 'slowdown':
+        return replace(design, slowdown=3 - design.slowdown)
+    if what == 'rotation':
+        return replace(design, rotation=str(rng.choice([r for r in ROTATIONS if r != design.rotation])))
+    if what == 'limits':
+        return replace(design, limits=() if design.limits else (DEAD_LIMIT,))
+    return replace(design, coarse_start=str(rng.choice([s for s in COARSE_STARTS if s != design.coarse_start])))
+
+
+# The cityscape's design as the design runs draw it (design.py's 'design' convention):
+# the control every design run includes.  city.DESIGN is the same design under the
+# 'cityscape' convention, by which the reference was drawn and --city-draws draws.
+CITYSCAPE_DESIGN = Design(city.SCALES, tuple(city.PLAN), ('slow',) * (len(city.SCALES) - 1))
 
 
 # ---------------------------------------------------------------- measures
 
-# metrics.MEASURES applied to every fine-layer space-time volume
-MEASURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'components', 'change',
-            'corr_time', 'overhangs')
-
-
-def context_info(fine, context):
-    """Mutual information between a voxel's state and its coarse context, as a share of
-    the voxel state's entropy.  0: the coarse layers make no difference to what is
-    solid; 1: the context alone says what is solid."""
-    c = np.asarray(context, np.int64).ravel()
-    joint = np.bincount(c * 2 + fine.ravel(), minlength=2 * (int(c.max()) + 1)).reshape(-1, 2) / c.size
-
-    def h(p):
-        p = p[p > 0]
-        return float(-(p * np.log2(p)).sum())
-    h_fine = h(joint.sum(axis=0))
-    return (h_fine + h(joint.sum(axis=1)) - h(joint.ravel())) / h_fine if h_fine else 0.0
-
-
-def tilt(V, lag=6, reach=6):
-    """Space-time slant: the share of solid that arrived by sliding.  For frames in the
-    second half, the live cells that were not live `lag` steps earlier in place but
-    were at the best single displacement, less the average over displacements (chance).
-    0 for upright or churning structure, toward 1 when everything slides one way."""
-    T = V.shape[-1]
-    frames = np.arange(T // 2, T - lag, 6)
-    now = np.moveaxis(V[..., frames + lag], -1, 0)
-    before = np.moveaxis(V[..., frames], -1, 0)
-    live = np.maximum(now.sum(axis=(-2, -1)), 1)[..., None]
-    moved = metrics.overlaps(now & ~before, before, reach)[..., 1:] / live
-    return float((moved.max(axis=-1) - moved.mean(axis=-1)).mean())
-
-
-def macro_contrast(V, blocks=12):
-    """Spread of the density of (n / blocks)^3 blocks relative to a single voxel's: ~0
-    when material is spread evenly, larger when it gathers into districts."""
-    b = V.shape[0] // blocks
-    t = V.shape[-1] // b * b
-    means = V[:blocks * b, :blocks * b, :t].reshape(blocks, b, blocks, b, -1, b).mean(axis=(1, 3, 5))
-    p = V.mean()
-    return float(means.std() / math.sqrt(p * (1 - p))) if 0 < p < 1 else 0.0
-
-
-def rise(V):
-    """(density of the last third of the run - the first third) / mean density: positive
-    when the structure gets denser with height, negative when it thins out."""
-    T = V.shape[-1]
-    p = V.mean()
-    return float((V[..., -T // 3:].mean() - V[..., :T // 3].mean()) / p) if p else 0.0
-
-
-def thin_masks(V):
-    """One-voxel-thin solid: voxels whose solid face-neighbours lie along at most one
-    axis.  Returns (thin, hair, line): hair has its neighbours only in time, a 1x1
-    vertical thread (one cell staying put; the main fine noise of cityscape draws, made
-    by static banks whose frozen pattern has isolated cells); line has them only along
-    one spatial axis (e.g. the cityscape's thin horizontal fences).  Space wraps, time
-    does not."""
-    V = np.asarray(V, bool)
-    along = [np.roll(V, 1, ax) | np.roll(V, -1, ax) for ax in (0, 1)]
-    in_time = np.zeros(V.shape, bool)
-    in_time[..., 1:] |= V[..., :-1]
-    in_time[..., :-1] |= V[..., 1:]
-    thin = V & (along[0].astype(np.int8) + along[1] + in_time <= 1)
-    return thin, thin & in_time, thin & (along[0] | along[1])
-
-
-def hair(V):
-    """Share of solid voxels in one-voxel vertical threads (thin_masks): the reference
-    cityscape 0.02, random rule draws of its design median 0.13, the hairiest over 0.5."""
-    live = int(np.count_nonzero(V))
-    return float(np.count_nonzero(thin_masks(V)[1]) / live) if live else 0.0
-
-
-def measure_run(ca, steps):
-    return measure_record(ca.run(steps))
-
-
-def measure_record(st):
-    V = st.fine
-    row = {k: float(v) for k, v in metrics.measure(V, MEASURES).items()}
-    row.update(context_info=context_info(V, st.context), tilt=tilt(V), macro=macro_contrast(V),
-               rise=rise(V), hair=hair(V), turns=len(st.rotations))
-    return row
-
-
-# What a design must measure to be kept: the documented bands (metrics.MEASURES' reads)
-BANDS = {
-    'density': (0.05, 0.35),        # under 0.05 nothing to see, over ~0.35 opaque
-    'coherence': (2.0, None),       # 1 is noise, over 2 clustered (all-complex plan: 1.8)
-    'change': (0.001, 0.4),         # under 0.001 a frozen extrusion, over 0.4 churn
-    'context_info': (0.05, None),   # the coarse layers make a difference
-    'hair': (None, 0.15),           # one-voxel vertical threads (fine noise): reference 0.02;
-                                    # of the draws judged by eye, 0.12 looked fine, 0.20 and up dull
-}
+# Measures and bands: analysis/cities.py (MEASURES, BANDS, LOOSE_BANDS, measure_run).
 
 # What the diversity step compares designs on (means over a design's passing rule draws)
 FEATURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'change', 'corr_time',
@@ -414,12 +228,6 @@ FEATURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'change', 'cor
 
 # A design is kept if at least this share of its rule draws lands inside the bands
 MIN_RELIABILITY = 0.5
-
-
-def failed_bands(row, bands=BANDS):
-    """The bands `row` falls outside of (measures a row lacks, such as hair in runs made
-    before it was measured, are not checked)."""
-    return [k for k, band in bands.items() if k in row and not Band.of(band).contains(row[k])]
 
 
 # ---------------------------------------------------------------- running in parallel
@@ -431,32 +239,23 @@ def init_worker():
     _POOLS.update(families.load_pools())
 
 
-def city_plan(limits=None):
-    """The cityscape's plan, each entry limited by `limits` ({family: {trait: (lo, hi)}})
-    where given (see families.draw_plan)."""
-    limits = limits or {}
-    return [(f, limits[f]) if f in limits else f for f in city.PLAN]
+def city_design(limits=None):
+    """city.DESIGN (the cityscape convention, as the reference was drawn), with slider
+    limits {family: {trait: (lo, hi)}} on its draws where given."""
+    flat = tuple((f, t, lo, hi) for f, traits in (limits or {}).items() for t, (lo, hi) in traits.items())
+    return replace(city.DESIGN, limits=flat)
 
 
-def city_draw(seed, plan=None, pools=None):
-    """Rule draw `seed` of the cityscape's design (city.draw_banks), with `plan` entries
-    that may carry slider limits."""
+def build(design, seed, pools=None):
+    """Rule draw `seed` of `design` as a HierarchicalCA on the N x N lattice."""
     pools = _POOLS if pools is None else pools
-    plan = city.PLAN if plan is None else plan
-    limited = any(not isinstance(e, str) for e in plan)
-    return city.draw_banks(plan, seed, pools=pools, traits=traits_of(pools) if limited else None)
+    return design.build(seed, N, pools, traits_of(pools) if design.limits else None)
 
 
 def run_job(job):
-    """job = (design, seed): one measured run.  Design None is the cityscape's plan (rule
-    draw `seed`, started from `seed`), the reference the searches are compared with; a
-    list is the cityscape's plan with limits (city_plan)."""
+    """job = (design, seed): one measured run of rule draw `seed`."""
     design, seed = job
-    if design is None or isinstance(design, list):
-        ca = city.make(city_draw(seed, design), N, ic_seed=seed)
-    else:
-        ca = design.build(seed, N, _POOLS)
-    return measure_run(ca, N)
+    return measure_run(build(design, seed), N)
 
 
 def run_all(jobs, pool, what, fn=run_job):
@@ -603,7 +402,7 @@ def render_design(design, seed, path, res, pools):
     """Height-coloured render (as the cityscape is shown).  Design None is the reference
     cityscape, started from `seed`.  Volumes over 0.3 dense have the corner facing the
     camera cut away, as render3D.scenes does."""
-    ca = city.make(n=N, ic_seed=seed) if design is None else design.build(seed, N, pools)
+    ca = city.make(n=N, ic_seed=seed) if design is None else build(design, seed, pools)
     V = ca.run(N).fine
     if V.mean() > 0.3:
         V = cut_octant(V)
@@ -617,42 +416,6 @@ def atypicality(entry, seed):
     return search.Target({k: entry['mean'][k] for k in FEATURES}).distance(row)
 
 
-def font(size):
-    return ImageFont.load_default(size=size)
-
-
-def fit(draw, text, typeface, width):
-    """`text`, cut short with an ellipsis if it is wider than `width` pixels."""
-    if draw.textlength(text, font=typeface) <= width:
-        return text
-    while text and draw.textlength(text + '...', font=typeface) > width:
-        text = text[:-1]
-    return text + '...'
-
-
-def contact_sheet(entries, path, title, thumb=360, cols=4):
-    """entries: [(image path, line 1, line 2, line 3) or None for an empty cell], in
-    reading order."""
-    background = tuple(int(255 * c ** (1 / Lighting().gamma)) for c in Lighting().background)
-    rows = -(-len(entries) // cols)
-    label_h, header = 62, 40
-    sheet = Image.new('RGB', (cols * thumb, header + rows * (thumb + label_h)), background)
-    draw = ImageDraw.Draw(sheet)
-    draw.text((10, 10), title, fill=(220, 222, 230), font=font(18))
-    for k, entry in enumerate(entries):
-        if entry is None:           # an empty cell
-            continue
-        image, *lines = entry
-        x, y = (k % cols) * thumb, header + (k // cols) * (thumb + label_h)
-        with Image.open(image) as im:
-            sheet.paste(im.convert('RGB').resize((thumb, thumb), Image.LANCZOS), (x, y))
-        for j, (line, colour, size) in enumerate(zip(lines, ((220, 222, 230), (190, 194, 206), (150, 154, 168)),
-                                                     (14, 13, 12))):
-            draw.text((x + 6, y + thumb + 3 + 19 * j), fit(draw, line, font(size), thumb - 12),
-                      fill=colour, font=font(size))
-    sheet.save(path)
-
-
 def short(row):
     return (f'dens {row["density"]:.2f}  coh {row["coherence"]:.1f}  void {row["void"]:.2f}  '
             f'tilt {row["tilt"]:.2f}  ctx {row["context_info"]:.2f}' +
@@ -661,56 +424,23 @@ def short(row):
 
 # ---------------------------------------------------------------- instances
 
-# Bands for variants of instances someone already liked.  The structure is known to be
-# worth seeing, so near misses are kept to show the variety around it.
-LOOSE_BANDS = {
-    'density': (0.03, 0.45),
-    'coherence': (1.6, None),
-    'change': (0.0005, 0.5),
-    'context_info': (0.02, None),
-    'hair': (None, 0.25),
-}
-
-
-def slot_name(layer, context, n_banks):
-    """L<layer>.<parent bits, nearest parent first>, as in scripts/swap_banks.py."""
-    bits = format(context, f'0{n_banks.bit_length() - 1}b') if n_banks > 1 else ''
-    return f'L{layer}.{bits}' if bits else f'L{layer}'
-
-
-def to_hex(bank):
-    return np.packbits(bank).tobytes().hex()
-
-
-def from_hex(text):
-    return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8))
-
-
 @dataclass
-class Instance:
-    """One concrete hierarchical CA: a design plus the exact tables and starting state
-    it was built with, so a liked render can be changed a little at a time.
+class Instance(DrawnInstance):
+    """One concrete hierarchical CA (design.Instance: a design, its exact tables and
+    start seed) and where it came from in the search, so a liked render can be changed
+    a little at a time.
 
     lineage   the run1 design(s) it descends from
     kind      'pick' (liked), 'tweak' (one small change) or 'combo' (two picks combined)
     """
-    name: str
-    design: Design
-    banks: list            # per layer, (contexts, 512) uint8
-    ic_seed: int
-    lineage: str
+    name: str = ''
+    lineage: str = ''
     parent: str = ''
     change: str = ''
     kind: str = 'pick'
 
-    @classmethod
-    def of(cls, name, design, seed, pools, lineage):
-        """Rule draw `seed` of `design`, exactly as Design.build makes it."""
-        return cls(name, design, design.draw_banks(seed, pools), seed + 1000, lineage)
-
-    def build(self, n=N):
-        return self.design.assemble([b.copy() for b in self.banks],
-                                    self.design.start_states(self.ic_seed, n))
+    def build(self, n=N, ic_seed=None):
+        return super().build(n, ic_seed)
 
     def child(self, name, change, kind='tweak', **fields):
         return replace(self, name=name, parent=self.name, change=change, kind=kind, **fields)
@@ -741,18 +471,6 @@ class Instance:
         k = int(rng.choice([1, 2, 4, 8]))
         banks[layer][ctx] = flip_bits(banks[layer][ctx], k, rng)
         return self.child(name, f'flip {k} in {slot} {family}', banks=banks)
-
-    def to_json(self):
-        return {'name': self.name, 'design': self.design.to_json(), 'label': self.design.label,
-                'banks': [[to_hex(b) for b in layer] for layer in self.banks],
-                'ic_seed': self.ic_seed, 'lineage': self.lineage, 'parent': self.parent,
-                'change': self.change, 'kind': self.kind}
-
-    @classmethod
-    def from_json(cls, d):
-        banks = [np.array([from_hex(h) for h in layer], np.uint8) for layer in d['banks']]
-        return cls(d['name'], Design.from_json(d['design']), banks, d['ic_seed'], d['lineage'],
-                   d['parent'], d['change'], d['kind'])
 
 
 def combinations(picks, pools, rng, glide_draws=2):
@@ -800,7 +518,8 @@ def resolve_picks(specs, pools):
             lineage = run.removeprefix('around_') if run.startswith('around_') else ident
             for d in draws.split(','):
                 name = f'{ident}@{d}' if lineage == ident else f'{lineage}.{ident}@{d}'
-                picks.append(Instance.of(name, design, int(d), pools, lineage))
+                picks.append(Instance.draw(design, int(d), pools, traits_of(pools) if design.limits else None,
+                                           name=name, lineage=lineage))
         elif len(parts) == 2:
             data = json.loads((OUT_ROOT / parts[0] / 'instances.json').read_text())
             picks.append(replace(Instance.from_json(data['instances'][parts[1]]['instance']),
@@ -808,13 +527,6 @@ def resolve_picks(specs, pools):
         else:
             raise ValueError(f'not RUN:ID:DRAWS or RUN:NAME: {spec!r}')
     return picks
-
-
-def jaccard(a, b):
-    """Voxels solid in exactly one of two volumes, over voxels solid in either: 0
-    identical, toward 1 unrelated (two unrelated cityscapes differ by about 0.85)."""
-    either = int((a | b).sum())
-    return float((a ^ b).sum() / either) if either else 0.0
 
 
 _PARENT_VOLUMES = {}        # per worker: packed fine volumes of the parents seen so far
@@ -830,7 +542,7 @@ def run_instance_job(job):
         if parent.name not in _PARENT_VOLUMES:
             _PARENT_VOLUMES[parent.name] = np.packbits(parent.build().run(N).fine)
         before = np.unpackbits(_PARENT_VOLUMES[parent.name], count=st.fine.size)
-        row['jaccard'] = jaccard(st.fine, before.reshape(st.fine.shape).astype(bool))
+        row['jaccard'] = metrics.jaccard(st.fine, before.reshape(st.fine.shape).astype(bool))
     return row
 
 
@@ -866,6 +578,21 @@ def change_kind(inst):
         return 'new start'
     layer = inst.change.split()[3 if word == 'flip' else 1].split('.')[0]
     return f'{word} {inst.change.split()[1]} {layer}' if word == 'flip' else f'{word} {layer}'
+
+
+def keep(args, pools):
+    """Save one liked instance (RUN:ID:DRAW or RUN:NAME) to the saved catalogue."""
+    spec, name = args.keep
+    picks = resolve_picks([spec], pools)
+    if len(picks) != 1:
+        raise SystemExit(f'--keep takes one instance; {spec} names {len(picks)}')
+    inst = picks[0]
+    row = measure_run(inst.build(), N)
+    shown = ('density', 'pillars', 'void', 'streaks', 'coherence', 'tilt', 'hair', 'context_info')
+    entry = saved.from_instance(name, inst, N, {k: row[k] for k in shown},
+                                found_by=f'scripts/search_hierarchies.py {spec}', notes=args.notes)
+    saved.keep(entry)
+    print(f'kept {spec} ({inst.design.label}) as {name!r} in {saved.CATALOGUE}: {short(row)}')
 
 
 def explore_instances(args, pools):
@@ -998,13 +725,13 @@ def sample_designs(args, rng, pools, log):
                 break
             d = parent
             for _ in range(rng.integers(1, 3)):     # one or two changes
-                d = d.mutate(rng)
+                d = mutate(d, rng)
             if d not in seen:
                 seen.add(d)
                 designs.append(d)
         log(f'{len(designs) - 1} variants of {args.around} ({parent.label}) from {args.source}')
         return designs, [args.around] + [f'v{k:04d}' for k in range(1, len(designs))]
-    designs = [CITYSCAPE_DESIGN] + [Design.random(rng) for _ in range(args.samples)]
+    designs = [CITYSCAPE_DESIGN] + [random_design(rng) for _ in range(args.samples)]
     return designs, ['city'] + [f'h{k:04d}' for k in range(1, len(designs))]
 
 
@@ -1019,7 +746,7 @@ def show(args, pools):
         for seed in args.seeds:
             path = out / f'{i}_seed{seed}.png'
             render_design(design, seed, path, args.res, pools)
-            row = measure_run(design.build(seed, N, pools), N)
+            row = measure_run(build(design, seed, pools), N)
             entries.append((path, f'{i}  rule draw {seed}', design.label, short(row)))
             print(f'{path.name}: {short(row)}', flush=True)
     contact_sheet(entries, out / 'sheet.png', f'{", ".join(args.show)} over rule draws',
@@ -1028,10 +755,10 @@ def show(args, pools):
 
 
 def render_city_draw_job(job):
-    """job = (rule draw, path, res, plan): the cityscape's design at that rule draw from
-    the current pools, rendered as render_design does."""
-    seed, path, res, plan = job
-    V = city.make(city_draw(seed, plan), N, ic_seed=seed).run(N).fine
+    """job = (rule draw, path, res, design): the cityscape's design at that rule draw
+    from the current pools, rendered as render_design does."""
+    seed, path, res, design = job
+    V = build(design, seed).run(N).fine
     if V.mean() > 0.3:
         V = cut_octant(V)
     save_png(render(V, camera=Camera(res, res)), path)
@@ -1057,13 +784,13 @@ def city_draws(args, pools):
     seeds = list(range(1, args.city_draws + 1))
     shown = seeds[:args.top]
     limits = parse_limits(args.limit)
-    plan = city_plan(limits) if limits else None
+    design = city_design(limits)
     print(f'the cityscape design at {len(seeds)} rule draws; pools {pools_fingerprint(pools)}'
           + (f'; limits {limits}' if limits else ''), flush=True)
     with ProcessPoolExecutor(args.jobs, initializer=init_worker) as pool:
-        rows = run_all([(plan, s) for s in seeds], pool, 'cityscape draws')
+        rows = run_all([(design, s) for s in seeds], pool, 'cityscape draws')
         if not args.no_render:
-            list(pool.map(render_city_draw_job, [(s, out / 'renders' / f'draw{s}.png', args.res, plan)
+            list(pool.map(render_city_draw_job, [(s, out / 'renders' / f'draw{s}.png', args.res, design)
                                                  for s in shown]))
     reference = measure_run(city.make(n=N, ic_seed=3), N)
     for s, row in zip(seeds, rows):
@@ -1084,12 +811,11 @@ def city_draws(args, pools):
     text = '\n'.join(lines)
     print(text)
     (out / 'summary.txt').write_text(text + '\n', encoding='utf-8')
-    families_of = [city.PLAN] + [['slow'] * hierarchy.n_contexts(i, len(city.SCALES))
-                                 for i in range(1, len(city.SCALES))]
+    traits = traits_of(pools) if design.limits else None
     (out / 'draws.json').write_text(json.dumps({
         'pools': pools_fingerprint(pools),
         'draws': [{'draw': s, 'measures': row,
-                   'banks': hierarchy.format_banks(city_draw(s, plan, pools), families_of)}
+                   'banks': hierarchy.format_banks(design.draw_banks(s, pools, traits), design.slot_families())}
                   for s, row in zip(seeds, rows)]}, indent=1))
     if args.no_render:
         return
@@ -1122,6 +848,9 @@ def main():
     p.add_argument('--from', dest='source', metavar='TAG', help='an earlier run, for --around/--show')
     p.add_argument('--instances', metavar='SPEC', nargs='+',
                    help='liked instances to vary and combine: RUN:ID:DRAWS or RUN:NAME')
+    p.add_argument('--keep', nargs=2, metavar=('SPEC', 'NAME'),
+                   help='save one liked instance (RUN:ID:DRAW or RUN:NAME) to the catalogue as NAME')
+    p.add_argument('--notes', default='', help='--keep: notes for the saved entry')
     p.add_argument('--variants', type=int, default=60, help='small changes per liked instance')
     p.add_argument('--per-pick', type=int, default=4, help='small changes shown per liked instance')
     p.add_argument('--combo-top', type=int, default=16, help='combinations shown')
@@ -1141,6 +870,8 @@ def main():
         return show(args, pools)
     if args.city_draws:
         return city_draws(args, pools)
+    if args.keep:
+        return keep(args, pools)
     if args.instances:
         return explore_instances(args, pools)
     tag = args.tag or (f'around_{args.around}' if args.around else f'run{args.seed}')
@@ -1158,7 +889,7 @@ def main():
     designs, ids = sample_designs(args, rng, pools, log)
 
     with ProcessPoolExecutor(args.jobs, initializer=init_worker) as pool:
-        city_runs = run_all([(None, s) for s in args.seeds], pool, 'reference cityscape')
+        city_runs = run_all([(city.DESIGN, s) for s in args.seeds], pool, 'reference cityscape')
         city_entry = summarise([{'seed': s, **r} for s, r in zip(args.seeds, city_runs)])
         reference = city_entry['mean']
         log(f'reference: the cityscape plan (2/4/2): {city_entry["reliability"]:.0%} of rule '

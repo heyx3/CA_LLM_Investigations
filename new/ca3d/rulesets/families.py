@@ -334,32 +334,28 @@ def _active_share(record, mask=None):
     return float(active[mask].mean())
 
 
-def _spindly_share(state):
-    """Share of live cells with at most one live neighbour (of 8); NaN if none live."""
-    live = state.astype(bool)
-    if not live.any():
-        return np.nan
-    n = np.zeros(live.shape, np.int8)
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if dy or dx:
-                n += np.roll(np.roll(live, dy, 0), dx, 1)
-    return float((live & (n <= 1)).sum() / live.sum())
-
-
-def trait_values(table):
-    """(density, spindly, activity) of one 512-entry table (see the module docstring)."""
+def trait_parts(table):
+    """Everything the traits of one 512-entry table are made from: {'density',
+    'spindly', 'settled', 'fed', 'activity'} (see the module docstring)."""
     table = np.asarray(table, np.uint8)
     density, spindly, settled = [], [], []
     for p0 in TRAIT_STARTS:
         run = Assay(n=TRAIT_N, p0=p0, steps=TRAIT_STEPS, burn=0).run(MOORE, table[None], record=True)
         density.append(float(run.final[0].mean()))
-        spindly.append(_spindly_share(run.final[0]))
+        spindly.append(float(metrics.spindly(run.final[0])))
         settled.append(_active_share(run.history[0]))
     record, streets = handover_run(table)
     fed = _active_share(record, streets)
-    spindly = float(np.nanmean(spindly)) if np.isfinite(spindly).any() else np.nan
-    return float(np.mean(density)), spindly, (float(np.mean(settled)) + fed) / 2
+    settled = float(np.mean(settled))
+    return {'density': float(np.mean(density)),
+            'spindly': float(np.nanmean(spindly)) if np.isfinite(spindly).any() else np.nan,
+            'settled': settled, 'fed': fed, 'activity': (settled + fed) / 2}
+
+
+def trait_values(table):
+    """(density, spindly, activity) of one 512-entry table (see the module docstring)."""
+    parts = trait_parts(table)
+    return tuple(parts[name] for name in TRAITS)
 
 
 def compute_traits(pools, jobs=None, log=print):

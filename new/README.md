@@ -42,7 +42,8 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `life.py` | 2D B/S and 512-entry Moore rules, expansion, rule rotation |
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
 | `families.py` | rule families (dead, static, complex, edge, slow, erode, grow, drift, frozen, glide), the pools new rules are drawn from, and each pool table's traits (density, spindly, activity) for drawing within slider limits |
-| `cityscape.py` | the reference cityscape (its rule tables and `make`), `draw_banks` for new rule sets in its style, context plans and measured profile |
+| `design.py` | hierarchical CAs described by families: a `Design` (which family each bank slot draws from, scales, schedule, rotation, coarse start) and an `Instance` (one rule draw of it: exact tables and start seed), and the two conventions for turning seeds into tables and starts |
+| `cityscape.py` | the reference cityscape (its rule tables and `make`), its `DESIGN`, `draw_banks` for new rule sets in its style, context plans and measured profile |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
 | `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain |
@@ -59,6 +60,7 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `metrics.py` | every measure, for 2D grids and 3D volumes (batched), with a registry of what values read as |
 | `dynamics.py` | rule spaces (1D Wolfram, 2D/3D outer-totalistic, 2D Moore), assays (how a rule is tested), lazily measured trials |
 | `search.py` | bands, criteria, staged pipelines, candidate samplers, target profiles, parameter sweeps, result tables |
+| `cities.py` | judging a hierarchy's run as a city: the measures every run records and the bands it must fall in |
 | `banks.py` | rule banks measured on their own: a census of any rule set (every life-like rule, say) from fixed starts, kept as a table and queried by family |
 | `influence.py` | hierarchy coupling tests: pinning, one-cell perturbation, pattern traffic, uniform vs effective parent sensitivity, XOR coupling |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
@@ -70,6 +72,7 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `render.py` | orthographic isometric voxel renderer (ray marching) with shadows |
 | `color.py` | ramps, HSV layer palette, 2D colourisers |
 | `scenes.py` | named recipes for every construction, plus scenes for saved rules |
+| `sheets.py` | contact sheets: many renders with captions on one image |
 
 Scripts: `render_scene.py` and `render_gallery.py` (images; both take saved-rule names),
 `find_rules.py` (rule search from the command line), `run_experiment.py` (the
@@ -88,6 +91,8 @@ coarse layers rules from the slow pool, and starts layer 0 from patchy blobs. Th
 reference cityscape is one such draw, stored as its rule tables
 (`cityscape.REFERENCE_BANKS`); `cityscape.make()` builds it, and
 `cityscape.make(cityscape.draw_banks(plan, seed))` a new city in the same style.
+`rulesets/design.py` describes any such hierarchy by its families (a `Design`), and
+writes down one rule draw of it as an `Instance`, which can be saved.
 
 Rotation turns every rule bank 90 degrees mid-run, changing the direction structures
 grow in. `RotateEvery(period)` turns at fixed intervals; `RotateOnDensityLadder` turns
@@ -166,7 +171,8 @@ search is cheap to rerun but hard to rerun identically; the catalogue keeps the 
 ```
 
 From Python: `saved.get(name).table()`, `.assay()`, `.build()` (hierarchical entries),
-`saved.keep(entry)`, `saved.drop(name)`.
+`saved.keep(entry)`, `saved.drop(name)`, and `saved.from_instance(name, instance, n)` for
+a hierarchy found by `scripts/search_hierarchies.py` (which does it with `--keep SPEC NAME`).
 Saved so far:
 
 | name | what it is |
