@@ -23,11 +23,12 @@ import time
 
 import numpy as np
 
-from ..rulesets import (cityscape, deposition, double_spacetime as dst, families, hierarchy,
-                        initial, lattice_gas as lgca, life, lwd, octaves, triplanar, wolfram)
-from . import dynamics, influence, metrics, search
-from .dynamics import Assay
-from .search import Criterion, Pipeline, Stage, Table
+from ..analysis import dynamics, influence, metrics, search
+from ..analysis.dynamics import Assay
+from ..analysis.search import Criterion, Pipeline, Stage, Table
+from ..rulesets import (deposition, double_spacetime as dst, hierarchy, initial, lattice_gas as lgca, life,
+                        lwd, octaves, triplanar, wolfram)
+from . import cityscape, moore_families
 
 EXPERIMENTS = {}
 
@@ -57,7 +58,7 @@ def _timed(fn):
 # ---------------------------------------------------------------- recorded rules
 # What the replays below reproduce: the family criteria and B/S rule lists as recorded
 # when the original rule pools were built.  They are copied here, not read from
-# rulesets.families, so the families can change without changing what is replayed.
+# studies.moore_families, so the families can change without changing what is replayed.
 
 RECORDED_DENSE = Assay(p0=0.85, burn=45)      # dense soup: dead and static are judged from it
 RECORDED_COIN = Assay(init='coin')            # fair-coin soup: slow is judged from it
@@ -239,7 +240,7 @@ def native3d_census(quick=False, log=print):
 # ================================================================ the hierarchical CA
 
 def _pools():
-    return families.load_pools()
+    return moore_families.load_pools()
 
 
 @experiment
@@ -420,7 +421,7 @@ def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77):
     banks = [None] * L
     for i in range(L - 1, 0, -1):
         banks[i] = hierarchy.banks_from_pool(pools['slow'], 2 ** (L - 1 - i), rng)
-    banks[0] = hierarchy.banks_from_plan(pools, plan, _rng(plan_seed))
+    banks[0] = moore_families.draw_plan(plan, _rng(plan_seed), pools)
     states = [rng.integers(0, 2, (n // d, n // d)).astype(np.uint8) for d in divs]
     states[0] = initial.blobs(n, _rng(seed))
     layers = [hierarchy.Layer(banks[i], divs[i], divs[i], min(i, divs[i] - 1)) for i in range(L)]

@@ -23,17 +23,22 @@ python -m venv .venv
 ```
 
 The rule pools come ready in `data/rule_pools.npz`. Rebuilding them (after changing a
-family in `rulesets/families.py`) first measures every life-like rule into
+family in `studies/moore_families.py`) first measures every life-like rule into
 `data/bank_census.npz`. That file is not committed; it takes about 12 minutes on 20
 processes, and is then cached.
 
 ## Layout
 
-`ca3d` has three sub-packages; import modules from them, e.g.
-`from ca3d.rulesets import cityscape` or `from ca3d.analysis import search`.
-Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
+`ca3d` has four sub-packages; import modules from them, e.g.
+`from ca3d.studies import cityscape` or `from ca3d.analysis import search`.
+Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, then `studies/cityscape`.
 
-**`ca3d/rulesets/`**: the cellular automata.
+Each package only imports the ones before it: `rulesets` (the CAs themselves) ←
+`analysis` (general measures and search tools) ← `studies` (particular CAs analysed in
+depth, and the finds). `render3D/scenes.py` also draws on `studies` for its scenes.
+
+**`ca3d/rulesets/`**: the cellular automata: engines and rule tables, with no
+knowledge of any analysis.
 
 | module | what it is |
 | --- | --- |
@@ -41,11 +46,7 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `wolfram.py` | 1D binary CA of any radius; `lsb`/`msb` rule numbering |
 | `life.py` | 2D B/S and 512-entry Moore rules, expansion, rule rotation |
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
-| `families.py` | rule families (dead, static, complex, edge, slow, erode, grow, drift, frozen, glide), the pools new rules are drawn from, and each pool table's traits (density, spindly, activity) for drawing within slider limits |
-| `design.py` | hierarchical CAs described by families: a `Design` (which family each bank slot draws from, scales, schedule, rotation, coarse start) and an `Instance` (one rule draw of it: exact tables and start seed), and the two conventions for turning seeds into tables and starts |
-| `cityscape.py` | the reference cityscape (its rule tables and `make`), its `DESIGN`, `draw_banks` for new rule sets in its style, context plans and measured profile |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
-| `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain |
 | `triplanar.py` | three 1D sheets combined on orthogonal planes |
 | `octaves.py` | octave blending of any volume builder |
@@ -60,9 +61,18 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `metrics.py` | every measure, for 2D grids and 3D volumes (batched), with a registry of what values read as |
 | `dynamics.py` | rule spaces (1D Wolfram, 2D/3D outer-totalistic, 2D Moore), assays (how a rule is tested), lazily measured trials |
 | `search.py` | bands, criteria, staged pipelines, candidate samplers, target profiles, parameter sweeps, result tables |
-| `cities.py` | judging a hierarchy's run as a city: the measures every run records and the bands it must fall in |
 | `banks.py` | rule banks measured on their own: a census of any rule set (every life-like rule, say) from fixed starts, kept as a table and queried by family |
 | `influence.py` | hierarchy coupling tests: pinning, one-cell perturbation, pattern traffic, uniform vs effective parent sensitivity, XOR coupling |
+
+**`ca3d/studies/`**: particular CAs analysed in depth, and what was found. A module
+specific to one kind of CA is named after it.
+
+| module | what it is |
+| --- | --- |
+| `moore_families.py` | families of 512-entry Moore rules (dead, static, complex, edge, slow, erode, grow, drift, frozen, glide), the pools new rules are drawn from, and each pool table's traits (density, spindly, activity) for drawing within slider limits |
+| `hierarchy_designs.py` | hierarchical CAs described by Moore families: a `Design` (which family each bank slot draws from, scales, schedule, rotation, coarse start) and an `Instance` (one rule draw of it: exact tables and start seed), and the two conventions for turning seeds into tables and starts |
+| `cityscape.py` | the reference cityscape (its rule tables and `make`), its `DESIGN`, `draw_banks` for new rule sets in its style, context plans, measured profile, and the bands other hierarchies are judged by |
+| `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
 
 **`ca3d/render3D/`**: turning volumes into pictures.
@@ -91,7 +101,7 @@ coarse layers rules from the slow pool, and starts layer 0 from patchy blobs. Th
 reference cityscape is one such draw, stored as its rule tables
 (`cityscape.REFERENCE_BANKS`); `cityscape.make()` builds it, and
 `cityscape.make(cityscape.draw_banks(plan, seed))` a new city in the same style.
-`rulesets/design.py` describes any such hierarchy by its families (a `Design`), and
+`studies/hierarchy_designs.py` describes any such hierarchy by its families (a `Design`), and
 writes down one rule draw of it as an `Instance`, which can be saved.
 
 Rotation turns every rule bank 90 degrees mid-run, changing the direction structures
@@ -158,7 +168,7 @@ Measurement traps the code handles explicitly:
 
 ## Saved rules
 
-Finds worth keeping go into `data/saved_rules.json` (`ca3d.rulesets.saved`): the rule
+Finds worth keeping go into `data/saved_rules.json` (`ca3d.studies.saved`): the rule
 (B/S notation, a hex rule number, a 512-entry Moore table as hex, or every rule bank of
 a hierarchical CA), the settings it
 was found and looked good under, what it measured, how it was found, and a note. A
@@ -190,7 +200,7 @@ strands (coherence 1.8 vs 3.4), so it was not kept.
 
 ## Experiments
 
-`ca3d/analysis/experiments.py` holds named experiments. `python scripts/run_experiment.py
+`ca3d/studies/experiments.py` holds named experiments. `python scripts/run_experiment.py
 NAME` runs one, and `--all --quick` smoke-tests them all. Each prints its tables with
 the numbers recorded earlier underneath, and writes them to `out/experiments/`. How the
 results compare with the recorded ones is in [docs/REPRODUCTION.md](docs/REPRODUCTION.md).

@@ -7,7 +7,8 @@ to the hierarchy engine that alters these results is noticed.
 import pytest
 
 from ca3d.analysis import metrics
-from ca3d.rulesets import cityscape, hierarchy
+from ca3d.rulesets import hierarchy
+from ca3d.studies import cityscape
 
 
 def test_cityscape_coarse_layers_match_the_notes():

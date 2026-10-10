@@ -1,6 +1,6 @@
 """Hierarchical CAs described by families: designs, and the concrete CAs drawn from them.
 
-A *design* says which rule family every bank slot draws from (rulesets/families.py),
+A *design* says which rule family every bank slot draws from (studies/moore_families.py),
 plus the layer scales, schedule, rotation and starting pattern.  A seed turns it into
 a concrete CA: one table per slot, drawn from the family pools, and the starting
 states.  An *instance* is that concrete CA written down (the design, its exact tables
@@ -8,7 +8,7 @@ and its start seed), so it rebuilds identically even after the pools change.
 
     d = Design((1, 2, 4, 8), ('dead', 'dead', 'static', 'static', 'static', 'static',
                'complex', 'complex'), ('slow', 'slow', 'slow'))
-    ca = d.build(seed=2, n=144, pools=families.load_pools())
+    ca = d.build(seed=2, n=144, pools=moore_families.load_pools())
     inst = Instance.draw(d, 2, pools)              # the same CA, tables kept
     saved.keep(saved.from_instance('my_city', inst, n=144))
 
@@ -36,8 +36,9 @@ from dataclasses import asdict, dataclass, fields
 
 import numpy as np
 
-from . import families, hierarchy, initial
-from .rules import from_hex, to_hex
+from ..rulesets import hierarchy, initial
+from ..rulesets.rules import from_hex, to_hex
+from . import moore_families
 
 CONVENTIONS = ('design', 'cityscape')
 
@@ -123,7 +124,7 @@ class Design:
     rotation      'none', 'every<steps>' or 'ladder[<delta>]' (module docstring)
     coarse_start  'coin' (fair coin flips) or an initial.STARTS pattern, block-averaged
                   to each coarse layer's scale
-    limits        (family, trait, lo, hi) slider limits (families.TRAITS) on every
+    limits        (family, trait, lo, hi) slider limits (moore_families.TRAITS) on every
                   draw from that family, e.g. ('dead', 'activity', 0.0, 0.8)
     convention    how a seed becomes tables and starts: 'design' or 'cityscape'
     """
@@ -189,10 +190,10 @@ class Design:
     def draw_banks(self, seed, pools=None, traits=None):
         """Rule draw `seed`: one table per slot from the slot's family pool (within the
         design's limits), one (contexts, 512) array per layer.  `traits` are
-        families.load_traits(pools), loaded if needed and not given."""
-        pools = families.load_pools() if pools is None else pools
+        moore_families.load_traits(pools), loaded if needed and not given."""
+        pools = moore_families.load_pools() if pools is None else pools
         if traits is None and self.limits:
-            traits = families.load_traits(pools)
+            traits = moore_families.load_traits(pools)
         rng = np.random.default_rng(seed)
         n_layers = len(self.scales)
         plan = [e for f in self.plan for e in self._entries(f)]
@@ -200,14 +201,14 @@ class Design:
         def coarse_layer(i, family):
             n_ctx = hierarchy.n_contexts(i, n_layers)
             if self.limits_for(family):
-                return families.draw_plan(self._entries(family, n_ctx), rng, pools, traits)
+                return moore_families.draw_plan(self._entries(family, n_ctx), rng, pools, traits)
             return hierarchy.banks_from_pool(pools[family], n_ctx, rng)
 
         if self.convention == 'design':
-            return ([families.draw_plan(plan, rng, pools, traits)] +
+            return ([moore_families.draw_plan(plan, rng, pools, traits)] +
                     [coarse_layer(i, f) for i, f in enumerate(self.coarse, 1)])
         banks = [coarse_layer(i, f) for i, f in enumerate(self.coarse[:1] + self.coarse)]
-        banks[0] = families.draw_plan(plan, rng, pools, traits)
+        banks[0] = moore_families.draw_plan(plan, rng, pools, traits)
         return banks
 
     def start_states(self, ic_seed, n):

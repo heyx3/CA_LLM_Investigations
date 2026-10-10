@@ -45,7 +45,7 @@ The pools are for drawing "some rule of this family".  A seeded draw picks rules
 their position in a pool, so it gives the same rules only for one build of the pools,
 and the families and pools are free to change.  Code that needs one particular rule
 set keeps the tables themselves (cityscape.REFERENCE_BANKS, the saved hierarchy
-entries, the recorded criteria in analysis/experiments.py).
+entries, the recorded criteria in studies/experiments.py).
 
 Traits and sliders.  Members of one family still differ a lot, so every pool table also
 has three measured traits (TRAITS; `load_traits`), and each trait a 0-1 slider: the
@@ -74,10 +74,10 @@ from pathlib import Path
 
 import numpy as np
 
-from . import life
 from ..analysis import banks, metrics
 from ..analysis.dynamics import Assay, Moore, Totalistic
 from ..analysis.search import Band, Criterion, Pipeline, perturbations
+from ..rulesets import life
 
 DATA = Path(__file__).resolve().parents[2] / 'data'
 CACHE = DATA / 'rule_pools.npz'
@@ -455,8 +455,8 @@ def pick(family, rng, pools=None, traits=None, **limits):
 
 def draw_plan(plan, rng, pools=None, traits=None):
     """One table per entry of `plan`, as a (len(plan), 512) array.  An entry is a family
-    name, or (family, {trait: (lo, hi)}) to draw within slider limits.  A plan of names
-    draws exactly as hierarchy.banks_from_plan does."""
+    name, or (family, {trait: (lo, hi)}) to draw within slider limits: each entry is a
+    member of that family's pool, uniformly at random among those within the limits."""
     pools = load_pools() if pools is None else pools
     if traits is None and any(not isinstance(e, str) for e in plan):
         traits = load_traits(pools)

@@ -32,7 +32,7 @@ while the pools are unchanged), summary.txt, components.json and sheets/<family>
 Shared parameters.  A measure that matters in every family becomes a slider a design
 sets per slot, rather than part of each family's description.  The sliders found here
 (density, spindly, and activity as measured by --activity) now live in
-rulesets/families.py as every pool table's traits; each slider is a 0-1 position among
+studies/moore_families.py as every pool table's traits; each slider is a 0-1 position among
 the family's pool, so 0.5 always means "typical for this family".  A static bank's
 spindly cells extrude into one-voxel vertical threads ("hair", see --noise); a dead
 bank's activity decides what it leaves in the gaps (see --dismantle).  Grain
@@ -42,8 +42,8 @@ settling were tried too and dropped: neither had a consistent visible effect.
 --cityscape tests them on the cityscape's design.  First, rule draws whose every slot
 holds one of the --near pool members nearest the reference cityscape's own bank in
 slider space; then, for each group of slots, one slider swept from 0 to 1 with
-everything else exactly the reference.  Cities are measured and judged as
-analysis/cities.py does for scripts/search_hierarchies.py.
+everything else exactly the reference.  Cities are measured and judged by the
+cityscape's bands (studies/cityscape.py), as in scripts/search_hierarchies.py.
 
     python scripts/bank_metrics.py --cityscape
 
@@ -57,7 +57,7 @@ hierarchy records which context, i.e. which bank, made every fine voxel, so the 
 is counted per bank, per context age (steps since the cell's context last changed: is
 noise a transient after a handover?) and per territory edge vs interior.  Then, family
 by family, which bank measures predict a bank's noise rate inside cities, and which
-coarse measures go with noisy cities.
+coarse measures go with noisy city.
 
     python scripts/bank_metrics.py --noise
 
@@ -115,12 +115,12 @@ from scipy.stats import norm, rankdata
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from ca3d.analysis import banks, cities, metrics, search               # noqa: E402
+from ca3d.analysis import banks, metrics, search                       # noqa: E402
 from ca3d.analysis.search import Criterion                             # noqa: E402
 from ca3d.render3D import sheets                                       # noqa: E402
 from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
-from ca3d.rulesets import cityscape as city, families                  # noqa: E402
-from ca3d.rulesets.design import slot_name                             # noqa: E402
+from ca3d.studies import cityscape as city, moore_families             # noqa: E402
+from ca3d.studies.hierarchy_designs import slot_name                   # noqa: E402
 
 OUT = ROOT / 'out' / 'bank_metrics'
 HIER_SEARCH = ROOT / 'out' / 'hier_search'      # scripts/search_hierarchies.py's output
@@ -162,20 +162,20 @@ def per_soup():
             Criterion('largest_part', None), Criterion('anisotropy', None),
             Criterion(spindly, None, label='spindly'),
             Criterion(settle, None, label='settle'), Criterion(blink, None, label='blink'),
-            Criterion(families.drift_score, None, label='drift'),
+            Criterion(moore_families.drift_score, None, label='drift'),
             Criterion('pillars', None, on='history'), Criterion('streaks', None, on='history'),
             Criterion('corr_time', None, on='history')]
 
 
-PROFILE = {'dense': banks.Soup(families.DENSE, per_soup(), record=True),
-           'coin': banks.Soup(families.COIN, per_soup(), record=True),
-           'sparse': banks.Soup(families.SPARSE, per_soup(), record=True),
-           'small': banks.Soup(families.SMALL, [Criterion('damage', None)])}
+PROFILE = {'dense': banks.Soup(moore_families.DENSE, per_soup(), record=True),
+           'coin': banks.Soup(moore_families.COIN, per_soup(), record=True),
+           'sparse': banks.Soup(moore_families.SPARSE, per_soup(), record=True),
+           'small': banks.Soup(moore_families.SMALL, [Criterion('damage', None)])}
 
 
 def own_soup(family):
     """The soup a family is judged from, on a 96^2 lattice for 96 steps (for renders)."""
-    return replace(families.FAMILIES[family].stages[0].assay, n=96, steps=96)
+    return replace(moore_families.FAMILIES[family].stages[0].assay, n=96, steps=96)
 
 
 # ---------------------------------------------------------------- profiling the pools
@@ -186,7 +186,7 @@ def profile(pools, jobs, rebuild, log):
     names = list(pools)
     tables = np.concatenate([pools[k] for k in names])
     family = np.concatenate([[k] * len(pools[k]) for k in names])
-    census = banks.cached(OUT / 'profile.npz', families.MOORE, PROFILE, tables=tables,
+    census = banks.cached(OUT / 'profile.npz', moore_families.MOORE, PROFILE, tables=tables,
                           rebuild=rebuild, jobs=jobs, log=log)
     return census, family
 
@@ -279,15 +279,15 @@ def report(census, family, log):
 
 
 def _soup_name(family):
-    assay = families.FAMILIES[family].stages[0].assay
-    return next(k for k, s in families.SOUPS.items() if s.assay == assay)
+    assay = moore_families.FAMILIES[family].stages[0].assay
+    return next(k for k, s in moore_families.SOUPS.items() if s.assay == assay)
 
 
 # ---------------------------------------------------------------- renders
 
 def render_bank(job):
     table, family, path, res = job
-    V = own_soup(family).run(families.MOORE, table[None], record=True).history[0]
+    V = own_soup(family).run(moore_families.MOORE, table[None], record=True).history[0]
     if V.mean() > 0.3:
         V = cut_octant(V)
     save_png(render(V, camera=Camera(res, res)), path)
@@ -334,9 +334,9 @@ def _short(column):
 
 # ---------------------------------------------------------------- shared parameters
 
-# The sliders are rulesets/families.py's traits (density, spindly, activity): every
+# The sliders are studies/moore_families.py's traits (density, spindly, activity): every
 # pool table's position, 0-1, among its family's pool.
-SLIDERS = families.TRAITS
+SLIDERS = moore_families.TRAITS
 
 
 def subset(values, rows):
@@ -369,14 +369,14 @@ GROUPS = {'dead': [(0, 0), (0, 1)], 'static': [(0, 2), (0, 3), (0, 4), (0, 5)],
 
 
 def run_city(job):
-    """job = (banks, ic_seed): the cityscape's measures (analysis/cities.py)."""
+    """job = (banks, ic_seed): the cityscape's measures (studies/cityscape.py)."""
     tables, seed = job
-    return cities.measure_run(city.make(tables, cities.N, ic_seed=seed), cities.N)
+    return city.measure_run(city.make(tables, city.N, ic_seed=seed), city.N)
 
 
 def render_city(job):
     tables, seed, path, res = job
-    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
+    V = city.make(tables, city.N, ic_seed=seed).run(city.N).fine
     if V.mean() > 0.3:
         V = cut_octant(V)
     save_png(render(V, camera=Camera(res, res)), path)
@@ -401,11 +401,11 @@ def cityscape_test(args, census, family, log):
 
     ref_families = [[f for f, _ in layer] for layer in city.REFERENCE_BANKS]
     names = sorted({f for layer in ref_families for f in layer})
-    traits = families.load_traits()
+    traits = moore_families.load_traits()
     members, positions = {}, {}
     for f in names:
         members[f] = census.tables[family == f]             # the profile keeps the pools' order
-        positions[f] = families.sliders(f, traits)
+        positions[f] = moore_families.sliders(f, traits)
 
     # the reference's own banks, placed on their family's sliders
     reference = city.reference_banks()
@@ -414,7 +414,7 @@ def cityscape_test(args, census, family, log):
     for l, layer in enumerate(ref_families):
         targets.append([])
         for c, f in enumerate(layer):
-            targets[l].append(families.place(f, reference[l][c], traits)[0])
+            targets[l].append(moore_families.place(f, reference[l][c], traits)[0])
             log(f'  {slot_name(l, c, len(layer)):7} {f:8} ' +
                 '  '.join(f'{n} {v:.2f}' for n, v in zip(SLIDERS, targets[l][c])))
 
@@ -459,7 +459,7 @@ def cityscape_test(args, census, family, log):
 
     # draws near the reference, against the unconditioned draws of the same design
     for s, row in zip(seeds, draw_rows):
-        row.update(draw=s, failed=' '.join(cities.failed_bands(row)))
+        row.update(draw=s, failed=' '.join(city.failed_bands(row)))
     inside = sum(not r['failed'] for r in draw_rows)
     log(f'\ndraws near the reference\'s sliders (one of the {args.near} nearest members per slot): '
         f'{inside} of {len(seeds)} inside the bands')
@@ -480,7 +480,7 @@ def cityscape_test(args, census, family, log):
     # the sweeps
     table = search.Table([{'group': g, 'slider': n, 'value': v, **{m: r[m] for m in
                            ('density', 'pillars', 'void', 'coherence', 'context_info')},
-                           'failed': ' '.join(cities.failed_bands(r))}
+                           'failed': ' '.join(city.failed_bands(r))}
                           for (g, n, v, _), r in zip(sweeps, sweep_rows)])
     log('\n' + table.show(title='one slider swept per group of slots, everything else the reference '
                                 f'(reference: {city_line(ref_row)})'))
@@ -532,7 +532,7 @@ def noise_record(job):
     voxel counts by context (the bank that made them), by context age, and by whether
     the cell sits on a territory edge (a 4-neighbour in another context)."""
     tables, seed = job
-    st = city.make(tables, cities.N, ic_seed=seed).run(cities.N)
+    st = city.make(tables, city.N, ic_seed=seed).run(city.N)
     masks = metrics.noise_masks(st.fine)
     C = st.context
     edge = np.zeros(C.shape, bool)
@@ -542,7 +542,7 @@ def noise_record(job):
     keep = (Ellipsis, slice(SKIP, None))
     C, edge, age = C[keep], edge[keep], age[keep]
     n_ctx = len(tables[0])
-    out = {'measures': cities.measure_record(st), 'cells_by_context': np.bincount(C.ravel(), minlength=n_ctx),
+    out = {'measures': city.measure_record(st), 'cells_by_context': np.bincount(C.ravel(), minlength=n_ctx),
            'cells_by_age': np.bincount(age.ravel(), minlength=len(AGE_EDGES))}
     for name, m in [('solid', st.fine)] + [(k, masks[k]) for k in NOISE]:
         m = m[keep]
@@ -554,7 +554,7 @@ def noise_record(job):
 
 def render_noise(job):
     tables, seed, path, res = job
-    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
+    V = city.make(tables, city.N, ic_seed=seed).run(city.N).fine
     masks = metrics.noise_masks(V)
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
@@ -582,7 +582,7 @@ def noise_study(args, census, family, log):
         outer(line)
         lines.append(str(line))
 
-    pools = families.load_pools()
+    pools = moore_families.load_pools()
     seeds = list(range(1, args.noise_draws + 1))
     jobs = [(city.reference_banks(), 3)] + [(city.draw_banks(seed=s, pools=pools), s) for s in seeds]
     t0 = time.perf_counter()
@@ -705,7 +705,7 @@ def render_noise_panels(job):
     noise voxels coloured (NOISE_PALETTE), and a close-up of its middle and top in the
     same colours, where single threads can be told apart."""
     tables, seed, stem, res = job
-    V = city.make(tables, cities.N, ic_seed=seed).run(cities.N).fine
+    V = city.make(tables, city.N, ic_seed=seed).run(city.N).fine
     masks = metrics.noise_masks(V)
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
@@ -732,10 +732,10 @@ def hair_test(args, census, family, log):
         lines.append(str(line))
 
     static = census.tables[family == 'static']          # the profile keeps the pools' order
-    pos = families.sliders('static')                     # density, spindly, activity
+    pos = moore_families.sliders('static')                     # density, spindly, activity
     where = {t.tobytes(): i for i, t in enumerate(static)}
     unfragmented = np.flatnonzero(pos[:, 1] <= 0.3)
-    pools = families.load_pools()
+    pools = moore_families.load_pools()
     slots = [c for c, f in enumerate(city.PLAN) if f == 'static']
     reference = city.reference_banks()
 
@@ -823,7 +823,7 @@ def hair_test(args, census, family, log):
                                    for i, (_, _, name) in enumerate(cells)])
            for letter, label, cells in layout],
           out / 'sheet.png', 'hair = share of solid voxels in one-voxel vertical threads (reference 0.02). '
-                             'Every row changes only the 4 static banks of its cities.', args.hair_thumb)
+                             'Every row changes only the 4 static banks of its city.', args.hair_thumb)
     names = {(l, i): name for l, i, (_, _, name) in cities}
     label_of = {letter: label for letter, label, _ in layout}
     sheets.labelled_sheet([(f'{l}. {label_of[l]}: {names[(l, i)]}, hair {measured[(l, i)]["hair"]:.3f}',
@@ -837,15 +837,15 @@ def hair_test(args, census, family, log):
 
 # ---------------------------------------------------------------- the dismantling test
 
-# The test itself is the activity trait's handover test (families.handover_run): the
+# The test itself is the activity trait's handover test (moore_families.handover_run): the
 # tested bank takes over the streets of a city made of the static bank
-# families.HANDOVER_MATERIAL, whose buildings keep that static bank.
+# moore_families.HANDOVER_MATERIAL, whose buildings keep that static bank.
 DISMANTLE_PALETTE = [(0.25, 0.62, 0.36), (0.72, 0.30, 0.62)]      # street (tested bank), building (static)
 
 
 def render_dismantle(job):
     table, stem, res = job
-    V, streets = families.handover_run(table)
+    V, streets = moore_families.handover_run(table)
     C = np.repeat((~streets)[..., None], V.shape[-1], axis=-1).astype(np.uint8)    # 0 street, 1 building
     save_png(render(V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}.png')
     save_png(render(~V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}_flip.png')
@@ -853,7 +853,7 @@ def render_dismantle(job):
 
 
 def dismantle_study(args, census, family, log):
-    """Hand banks of one family the same piece of city (families.handover_run) and render
+    """Hand banks of one family the same piece of city (moore_families.handover_run) and render
     what they do with it: anchors first (the reference's banks of that family and any
     in --anchors), then a random sample of the pool."""
     import json
@@ -866,7 +866,7 @@ def dismantle_study(args, census, family, log):
         zip(city.PLAN, city.reference_banks()[0])) if f == name]
     if args.anchors:
         cases += [(a['label'], life.parse_bank(a['bank'])) for a in json.loads(Path(args.anchors).read_text())]
-    pool = families.load_pools()[name]
+    pool = moore_families.load_pools()[name]
     picks = np.sort(np.random.default_rng(args.sample_seed).choice(len(pool), args.sample, replace=False))
     cases += [(f'{name} pool #{i}', pool[i]) for i in picks]
     stems = [out / 'renders' / f'case{k}' for k in range(len(cases))]
@@ -879,7 +879,7 @@ def dismantle_study(args, census, family, log):
                  entries[k:k + args.dismantle_cols]) for k in range(0, len(entries), args.dismantle_cols)]
         sheets.labelled_sheet(rows, out / f'sheet{suffix}.png',
               f'the dismantling test: {name} banks take over the streets of a static city (time upward, '
-              f'{families.TRAIT_STEPS} steps)', args.dismantle_thumb)
+              f'{moore_families.TRAIT_STEPS} steps)', args.dismantle_thumb)
     log(f'{len(cases)} {name} banks rendered; written to {out}')
 
 
@@ -887,10 +887,10 @@ def dismantle_study(args, census, family, log):
 
 def activity_of(table):
     """(settled, fed, activity) of one table: the parts of its activity trait
-    (families.trait_parts).  settled is the mean active share from the
-    families.TRAIT_STARTS soups, fed the active share of the streets in the dismantling
+    (moore_families.trait_parts).  settled is the mean active share from the
+    moore_families.TRAIT_STARTS soups, fed the active share of the streets in the dismantling
     test, activity their mean."""
-    parts = families.trait_parts(table)
+    parts = moore_families.trait_parts(table)
     return parts['settled'], parts['fed'], parts['activity']
 
 
@@ -909,7 +909,7 @@ def activity_study(args, census, family, log):
         lines.append(str(line))
 
     name = args.activity
-    pool = families.load_pools()[name]
+    pool = moore_families.load_pools()[name]
     anchors = [(f'reference L0.{c:03b}', t) for c, (f, t) in enumerate(zip(city.PLAN, city.reference_banks()[0]))
                if f == name]
     if args.anchors:
@@ -920,7 +920,7 @@ def activity_study(args, census, family, log):
     pool_values, anchor_values = values[:len(pool)], values[len(pool):]
     slider = _position(pool_values[:, 2], values[:, 2])
     log(f'activity of {len(pool)} {name} banks ({time.perf_counter() - t0:.0f}s): settled = active share from '
-        f'soups {families.TRAIT_STARTS}, fed = active share of the streets in the dismantling test, activity = their mean')
+        f'soups {moore_families.TRAIT_STARTS}, fed = active share of the streets in the dismantling test, activity = their mean')
     for q in (10, 25, 50, 75, 90):
         log(f'  p{q}: settled {np.percentile(pool_values[:, 0], q):.3f}  fed {np.percentile(pool_values[:, 1], q):.3f}  '
             f'activity {np.percentile(pool_values[:, 2], q):.3f}')
@@ -967,7 +967,7 @@ def dead_cap_study(args, census, family, log):
         outer(line)
         lines.append(str(line))
 
-    pools = families.load_pools()
+    pools = moore_families.load_pools()
     pool = pools['dead']
     rows = json.loads((OUT / 'activity' / 'dead.json').read_text())
     activity = np.array([r['activity'] for r in rows])
@@ -1076,7 +1076,7 @@ def main():
         print(line, flush=True)
         lines.append(str(line))
 
-    pools = families.load_pools()
+    pools = moore_families.load_pools()
     t0 = time.perf_counter()
     census, family = profile(pools, args.jobs, args.rebuild, log)
     log(f'{len(census)} pool tables, {len(census.values)} measures each '

@@ -1,6 +1,6 @@
 """Swap rule banks inside the cityscape and see what changes.
 
-The cityscape (rulesets/cityscape.py) is a four-layer hierarchical CA.  Each layer holds
+The cityscape (studies/cityscape.py) is a four-layer hierarchical CA.  Each layer holds
 one *rule bank* per context: a 512-entry Moore lookup table that the layer's cells use
 wherever its parent layers' bits spell that context.  Layer 0 has 8 banks drawn from the
 dead / static / complex families (the plan), and layers 1-3 have 4 + 2 + 1 drawn from the
@@ -15,7 +15,7 @@ space-time volumes, and renders each one coloured by its coarse layers:
     value       =  1.0 (layer 0 already decides solid or empty)
 
 Swaps fall into four kinds: within a layer or between layers, crossed with within a family
-or between families.  Results are summarised per kind and per slot.  Pairs holding identical
+or between moore_families.  Results are summarised per kind and per slot.  Pairs holding identical
 banks are listed and skipped (the slow pool repeats rules, so some coarse slots share one).
 No aesthetic score is computed; the change measures are:
 
@@ -65,8 +65,8 @@ sys.path.insert(0, str(ROOT))
 from ca3d.analysis import metrics, search                            # noqa: E402
 from ca3d.render3D import sheets                                     # noqa: E402
 from ca3d.render3D.render import Camera, Lighting, render, save_png   # noqa: E402
-from ca3d.rulesets import cityscape as city, families                 # noqa: E402
-from ca3d.rulesets.design import slot_name                            # noqa: E402
+from ca3d.studies import cityscape as city, moore_families            # noqa: E402
+from ca3d.studies.hierarchy_designs import slot_name                  # noqa: E402
 
 MEASURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'parts', 'largest_part',
             'change', 'corr_time')
@@ -166,7 +166,7 @@ _CONFIG = {}            # seed, first_start, n, steps, plan, res and the pools, 
 
 
 def configure(config):
-    _CONFIG.update(config, pools=families.load_pools())
+    _CONFIG.update(config, pools=moore_families.load_pools())
 
 
 def build(edit=None, ic_seed=None):

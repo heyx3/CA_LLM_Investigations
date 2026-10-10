@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import dynamics, metrics, search                  # noqa: E402
 from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
-from ca3d.rulesets import saved                                       # noqa: E402
+from ca3d.studies import saved                                        # noqa: E402
 
 SPACES = {
     'totalistic': lambda r: dynamics.Totalistic(2, r),

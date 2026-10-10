@@ -100,7 +100,7 @@ A **hierarchical** (or "multi-octave") CA is a stack of binary lattices at resol
   rule bank by 90° partway through. `RotateOnDensityLadder` turns each time the
   coarsest layer's density has climbed another `delta`, like rungs of a ladder.
 
-**Rule families** (`rulesets/families.py`) classify rules by behaviour rather than by
+**Rule families** (`studies/moore_families.py`) classify rules by behaviour rather than by
 table. The cityscape gives each of the fine layer's 8 contexts a rule from one family
 (the **context plan**: 2 dead, 4 static, 2 complex):
 
@@ -123,7 +123,7 @@ are answered from the table instead of by running rules again. All 262,144 life-
 rules have been measured this way, so a family's B/S members are simply the rows whose
 values fall in its bands. A family's **pool** is a sample of its members, each with a
 few table entries flipped, for drawing "some rule of this family" at random (no B/S
-rule translates, so the drift and glide pools are blends instead; see `families.py`).
+rule translates, so the drift and glide pools are blends instead; see `moore_families.py`).
 
 Members of one family still differ, so every pool table also carries three **traits**,
 each with a 0-1 **slider**: its position among its family's pool (0.5 means typical

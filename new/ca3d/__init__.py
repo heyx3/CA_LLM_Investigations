@@ -7,15 +7,18 @@ package measures, searches for and renders as voxel scenes.  New to the vocabula
 (lambda, B/S notation, soup, damage spreading, context...)?  Start with
 docs/CONCEPTS.md.
 
-Three sub-packages:
+Four sub-packages, each importing only the ones above it:
 
-  rulesets   the cellular automata: rule tables, CA engines, rule families, the volume
-             constructions, the cityscape and a catalogue of saved finds
+  rulesets   the cellular automata: rule tables, CA engines and the volume constructions
   analysis   measuring output (metrics) and searching for rules (dynamics, search,
-             influence), plus a set of re-runnable experiments
-  render3D   the voxel renderer, colouring, and named scenes ready to render
+             banks, influence): general tools for any CA
+  studies    particular CAs analysed in depth: the Moore-rule families, hierarchy
+             designs, the cityscape, a catalogue of saved finds and re-runnable
+             experiments
+  render3D   the voxel renderer, colouring, contact sheets, and named scenes ready to
+             render (the scenes draw on studies)
 
-    from ca3d.rulesets import cityscape
+    from ca3d.studies import cityscape
     from ca3d.render3D import render
     fine = cityscape.make().run(160).fine          # the reference cityscape
     image = render.render(fine)

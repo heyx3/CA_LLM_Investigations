@@ -2,7 +2,7 @@
 
 A rule bank is one rule table (in a hierarchy, the table a layer uses in one context).
 What a bank does inside a hierarchy is hard to read from its table, so banks are
-classified the way rulesets/families.py does it: run each one alone from a few fixed
+classified the way studies/moore_families.py does it: run each one alone from a few fixed
 starts and measure what it does.  A *census* runs a whole set of rules (a complete rule
 space, when it is small enough to list) from every start, records every measure
 without filtering anything, and keeps the values.  Questions about the rules ("which
@@ -108,7 +108,7 @@ class Census:
 
     def select(self, pipeline):
         """Mask of the rules that pass every criterion of a search.Pipeline (a family of
-        rulesets/families.py, say), read from the recorded values: the verdict
+        studies/moore_families.py, say), read from the recorded values: the verdict
         pipeline.select would give by running the rules."""
         ok = np.ones(len(self), bool)
         for stage in pipeline.stages:

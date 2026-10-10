@@ -18,8 +18,8 @@ What earlier work taught, and how this script uses it:
   (material decays slowly: tapering), `grow` (fills from a sparse start: mesas) and
   `drift` (patterns translate: slanted struts); for the coarse layers, `frozen`
   (territories that stop changing) and `glide` (compact territories that move:
-  leaning blocks) beside the cityscape's `slow`.  All are in rulesets/families.py.
-* Banks of one family still differ (rulesets/families.py: traits and sliders).  Dead
+  leaning blocks) beside the cityscape's `slow`.  All are in studies/moore_families.py.
+* Banks of one family still differ (studies/moore_families.py: traits and sliders).  Dead
   banks above activity 0.8 do not clear the material neighbouring contexts hand them:
   they sustain a churning mass that fills the gaps with fine noise.  Most sampled
   designs limit their dead draws to activity 0.8 or less (DEAD_LIMIT, shown in the
@@ -59,7 +59,7 @@ rule draw: its tables and starting state) instead of on designs:
     python scripts/search_hierarchies.py --instances run1:h0053:2,3 around_h0071:v0066:2
     python scripts/search_hierarchies.py --instances @out/hier_search/picks2.txt --tag round2
 
---keep saves one of them, by the same specs, to the catalogue (rulesets/saved.py,
+--keep saves one of them, by the same specs, to the catalogue (studies/saved.py,
 data/saved_rules.json), where render_scene.py and render_gallery.py --saved find it:
 
     python scripts/search_hierarchies.py --keep round2:h0053@2 terraces --notes "..."
@@ -98,13 +98,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                              # noqa: E402
-from ca3d.analysis.cities import BANDS, LOOSE_BANDS, N, failed_bands, measure_record, measure_run  # noqa: E402
 from ca3d.analysis.search import Band                                  # noqa: E402
 from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
 from ca3d.render3D.sheets import contact_sheet                         # noqa: E402
-from ca3d.rulesets import cityscape as city, families, hierarchy, saved  # noqa: E402
-from ca3d.rulesets.design import Design, slot_name                     # noqa: E402
-from ca3d.rulesets.design import Instance as DrawnInstance             # noqa: E402
+from ca3d.rulesets import hierarchy                                    # noqa: E402
+from ca3d.studies import cityscape as city, moore_families, saved      # noqa: E402
+from ca3d.studies.cityscape import BANDS, LOOSE_BANDS, N, failed_bands, measure_record, measure_run  # noqa: E402
+from ca3d.studies.hierarchy_designs import Design, slot_name           # noqa: E402
+from ca3d.studies.hierarchy_designs import Instance as DrawnInstance   # noqa: E402
 from ca3d.rulesets.rules import flip_bits                              # noqa: E402
 
 OUT_ROOT = ROOT / 'out' / 'hier_search'
@@ -145,7 +146,7 @@ COARSE_STARTS = {'coin': 12, 'blobs': 3, 'rings': 2, 'gradient': 1, 'quadrants':
                  'half_plane': 1}
 COARSE_WEIGHTS = {'slow': 6, 'frozen': 2, 'glide': 2}
 SLOWDOWNS = {1: 7, 2: 3}
-# Slider limits (families.TRAITS) a design may put on a family's draws: (family, trait,
+# Slider limits (moore_families.TRAITS) a design may put on a family's draws: (family, trait,
 # lo, hi).  Dead banks above activity 0.8 sustain a churning mass that fills the gaps
 # with fine noise; most designs exclude them, some keep them (their thick, organic
 # cliffs can be worth having on purpose).
@@ -156,9 +157,9 @@ _TRAITS = {}
 
 
 def traits_of(pools):
-    """families.load_traits, loaded once per process."""
+    """moore_families.load_traits, loaded once per process."""
     if not _TRAITS:
-        _TRAITS.update(families.load_traits(pools))
+        _TRAITS.update(moore_families.load_traits(pools))
     return _TRAITS
 
 
@@ -211,7 +212,7 @@ def mutate(design, rng):
     return replace(design, coarse_start=str(rng.choice([s for s in COARSE_STARTS if s != design.coarse_start])))
 
 
-# The cityscape's design as the design runs draw it (design.py's 'design' convention):
+# The cityscape's design as the design runs draw it (hierarchy_designs.py's 'design' convention):
 # the control every design run includes.  city.DESIGN is the same design under the
 # 'cityscape' convention, by which the reference was drawn and --city-draws draws.
 CITYSCAPE_DESIGN = Design(city.SCALES, tuple(city.PLAN), ('slow',) * (len(city.SCALES) - 1))
@@ -219,7 +220,7 @@ CITYSCAPE_DESIGN = Design(city.SCALES, tuple(city.PLAN), ('slow',) * (len(city.S
 
 # ---------------------------------------------------------------- measures
 
-# Measures and bands: analysis/cities.py (MEASURES, BANDS, LOOSE_BANDS, measure_run).
+# Measures and bands: studies/cityscape.py (MEASURES, BANDS, LOOSE_BANDS, measure_run).
 
 # What the diversity step compares designs on (means over a design's passing rule draws)
 FEATURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'change', 'corr_time',
@@ -236,7 +237,7 @@ _POOLS = {}
 
 
 def init_worker():
-    _POOLS.update(families.load_pools())
+    _POOLS.update(moore_families.load_pools())
 
 
 def city_design(limits=None):
@@ -426,7 +427,7 @@ def short(row):
 
 @dataclass
 class Instance(DrawnInstance):
-    """One concrete hierarchical CA (design.Instance: a design, its exact tables and
+    """One concrete hierarchical CA (hierarchy_designs.Instance: a design, its exact tables and
     start seed) and where it came from in the search, so a liked render can be changed
     a little at a time.
 
@@ -461,7 +462,7 @@ class Instance(DrawnInstance):
         if what == 'redraw':
             pool = pools[family]
             limits = self.design.limits_for(family)
-            members = families.allowed(family, limits, traits_of(pools)) if limits else np.arange(len(pool))
+            members = moore_families.allowed(family, limits, traits_of(pools)) if limits else np.arange(len(pool))
             for _ in range(20):
                 k = int(members[rng.integers(len(members))])
                 if not np.array_equal(pool[k], banks[layer][ctx]):
@@ -865,7 +866,7 @@ def main():
     if (args.around or args.show) and not args.source:
         p.error('--around and --show need --from')
 
-    pools = families.load_pools(rebuild=args.rebuild_pools)
+    pools = moore_families.load_pools(rebuild=args.rebuild_pools)
     if args.show:
         return show(args, pools)
     if args.city_draws:

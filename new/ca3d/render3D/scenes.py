@@ -14,8 +14,9 @@ import numpy as np
 
 from . import color
 from ..analysis import metrics
-from ..rulesets import (cityscape as city, deposition, double_spacetime as dst, families, hierarchy,
-                        lattice_gas, life, lwd, octaves, saved, triplanar as tri, wolfram)
+from ..rulesets import (deposition, double_spacetime as dst, hierarchy, lattice_gas, life, lwd, octaves,
+                        triplanar as tri, wolfram)
+from ..studies import cityscape as city, moore_families, saved
 from .render import Camera, cut_octant, render
 
 SCENES = {}
@@ -232,9 +233,9 @@ def hierarchy_sg0(seed=0, size=None):
 @scene
 def hierarchy_moore(seed=0, size=None):
     """Non-totalistic (512-bit) hierarchy: slow coarse layers, edge-of-chaos fine layer,
-    uniform random start.  Rules drawn at random from the edge and slow families."""
+    uniform random start.  Rules drawn at random from the edge and slow moore_families."""
     n = size or 160
-    pools = families.load_pools()
+    pools = moore_families.load_pools()
     rng = np.random.default_rng(seed)
     scales = hierarchy.pow2_scales(4)
     banks = [hierarchy.banks_from_pool(pools['edge' if i == 0 else 'slow'],
@@ -284,7 +285,7 @@ def cityscape_hsv(seed=3, size=None):
 def cityscape_twin(seed=3, size=None):
     """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8).
     Its plan was not recorded: the cityscape's plan twice, rules drawn at random from
-    the families."""
+    the moore_families."""
     n = size or 160
     scales = (1, 1, 2, 4, 8)
     ca = city.make(city.draw_banks(city.PLAN * 2, seed, scales), n, scales, ic_seed=seed)
@@ -294,7 +295,7 @@ def cityscape_twin(seed=3, size=None):
 # ---------------------------------------------------------------- saved finds
 
 def from_saved(name, seed=None, size=None):
-    """A scene from a saved entry (rulesets.saved).  2D rules show their space-time
+    """A scene from a saved entry (studies.saved).  2D rules show their space-time
     volume from the soup they were found with, 3D rules their final state; deposition
     and hierarchy entries are rebuilt from their settings.  `seed` replaces the soup
     (or, for a hierarchy, the starting-state) seed and `size` the lattice edge."""

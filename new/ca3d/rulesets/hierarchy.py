@@ -325,21 +325,16 @@ def banks_from_pool(pool, n_ctx, rng):
     return np.asarray(pool)[rng.integers(0, len(pool), n_ctx)].astype(np.uint8)
 
 
-def banks_from_plan(pools, plan, rng):
-    """Context c draws from the pool named plan[c], e.g. ['dead', 'static', ...]."""
-    return np.stack([pools[name][rng.integers(0, len(pools[name]))] for name in plan]).astype(np.uint8)
-
-
-def format_banks(banks, families=None):
+def format_banks(banks, labels=None):
     """Moore rule banks (one (contexts, 512) array per layer) as text, layer by layer:
-    [[[family, life.format_bank(table)], ...], ...].  `families` gives each bank's
-    family, in the same nesting; '' where not given."""
-    return [[[families[i][c] if families else '', life.format_bank(table)]
+    [[[label, life.format_bank(table)], ...], ...].  `labels` gives each bank a label
+    (a family name, say), in the same nesting; '' where not given."""
+    return [[[labels[i][c] if labels else '', life.format_bank(table)]
              for c, table in enumerate(layer)] for i, layer in enumerate(banks)]
 
 
 def parse_banks(spec):
-    """Inverse of `format_banks`: per layer, a list of [family, text] pairs (or of
+    """Inverse of `format_banks`: per layer, a list of [label, text] pairs (or of
     bare texts) -> one (contexts, 512) uint8 array per layer."""
     return [np.array([life.parse_bank(bank if isinstance(bank, str) else bank[1]) for bank in layer],
                      np.uint8) for layer in spec]

@@ -5,7 +5,7 @@ entry records what kind of system it is, the rule itself, the settings it was fo
 and looked good under, what it measured, and how it was found.  A search is cheap to
 rerun but hard to rerun *identically*; this keeps the results.
 
-    from ca3d.rulesets import saved
+    from ca3d.studies import saved
     saved.names()
     entry = saved.get('tower_field')
     entry.table()                          # the rule table
@@ -25,11 +25,11 @@ Kinds and how `rule` is written:
                 [family, rule] pairs in life.format_bank notation ('B678/S3468
                 ^109,326,353,432': a B/S rule with those entries flipped).  The other
                 settings say how it is started and run: n and ic_seed, then either
-                `design` (a rulesets.design.Design as JSON: scales, schedule, rotation,
+                `design` (a studies.hierarchy_designs.Design as JSON: scales, schedule, rotation,
                 coarse start and the convention its start seed is read with), or, for
                 entries saved without one, scales, start and coarse_start (names in
                 rulesets.initial.STARTS) and optional periods and rotation (text, as in
-                rulesets.design: 'every20', 'ladder0.05'), started by the 'cityscape'
+                studies.hierarchy_designs: 'every20', 'ladder0.05'), started by the 'cityscape'
                 convention.  `build()` makes it; `from_instance` writes one.
 
 render3D.scenes.from_saved(name) builds a renderable scene from an entry, and
@@ -39,7 +39,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import rules
+from ..rulesets import rules
 
 CATALOGUE = Path(__file__).resolve().parents[2] / 'data' / 'saved_rules.json'
 
@@ -97,14 +97,14 @@ class Saved:
 
     def banks(self):
         """A hierarchy entry's rule banks: one (contexts, 512) uint8 array per layer."""
-        from . import hierarchy
+        from ..rulesets import hierarchy
         if self.kind != 'hierarchy':
             raise ValueError(f'{self.name} is a {self.kind} entry, not a hierarchy')
         return hierarchy.parse_banks(self.settings['banks'])
 
     def instance(self):
-        """A hierarchy entry saved with its design, as a design.Instance."""
-        from . import design
+        """A hierarchy entry saved with its design, as a hierarchy_designs.Instance."""
+        from . import hierarchy_designs as design
         if 'design' not in self.settings:
             raise ValueError(f'{self.name} was saved without a design')
         return design.Instance(design.Design.from_json(self.settings['design']), self.banks(),
@@ -113,7 +113,7 @@ class Saved:
     def build(self, n=None, ic_seed=None):
         """A hierarchy entry as a HierarchicalCA, started as recorded unless `n` or
         `ic_seed` say otherwise."""
-        from . import design
+        from . import hierarchy_designs as design
         s = self.settings
         n = n or s['n']
         ic_seed = s['ic_seed'] if ic_seed is None else ic_seed
@@ -174,7 +174,7 @@ def drop(name, path=CATALOGUE):
 
 
 def from_instance(name, instance, n, measures=None, found_by='', notes=''):
-    """A Saved hierarchy entry for a design.Instance, run on an n x n lattice."""
+    """A Saved hierarchy entry for a hierarchy_designs.Instance, run on an n x n lattice."""
     settings = {'design': instance.design.to_json(), 'n': int(n), 'ic_seed': int(instance.ic_seed),
                 'scales': list(instance.design.scales), 'banks': instance.formatted_banks()}
     measures = {k: round(float(v), 4) for k, v in (measures or {}).items()}

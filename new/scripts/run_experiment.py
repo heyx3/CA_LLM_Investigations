@@ -1,4 +1,4 @@
-"""Run the reconstructed analysis experiments (ca3d/analysis/experiments.py).
+"""Run the reconstructed analysis experiments (ca3d/studies/experiments.py).
 
     python scripts/run_experiment.py --list
     python scripts/run_experiment.py slow_perturbation rule_census
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ca3d.analysis import experiments         # noqa: E402
+from ca3d.studies import experiments          # noqa: E402
 
 
 def main():

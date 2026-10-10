@@ -9,7 +9,7 @@ the tests (`tests/test_reproduction.py` and friends) pin the matches listed here
 
 Reproduced exactly except for its two `complex` contexts.  Its rule tables (rule draw 3
 of the 2/4/2 plan from the rebuilt pools) are now stored in `cityscape.REFERENCE_BANKS`,
-and the pool-search replays keep the recorded criteria in `analysis/experiments.py`, so
+and the pool-search replays keep the recorded criteria in `studies/experiments.py`, so
 none of this depends on the family pools staying as they are.
 
 * The `dead_static` and `slow_perturbation` experiments replay the earlier pool searches
@@ -78,7 +78,7 @@ uncertainty:
 
 * Rule pools: each family's members come from a census of all 262,144 life-like rules
   instead of the original random samples, and every perturbed or blended table is
-  checked against its family again (see `rulesets/families.py`).  The reference
+  checked against its family again (see `studies/moore_families.py`).  The reference
   cityscape and the replayed pool searches don't use the pools (see the seed-3
   cityscape above), so none of the reproduced numbers move.
 * Lattice gas: bounce-back used to overwrite the bounced particles of half the channels;
