@@ -17,7 +17,7 @@ Three sub-packages:
 
     from ca3d.rulesets import cityscape
     from ca3d.render3D import render
-    fine = cityscape.make(seed=3).run(160).fine
+    fine = cityscape.make().run(160).fine          # the reference cityscape
     image = render.render(fine)
 
 Conventions shared by every module:

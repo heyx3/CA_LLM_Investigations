@@ -4,9 +4,9 @@ answer can be worked out by hand, in 2D and in 3D, and batched against unbatched
 import numpy as np
 import pytest
 
-from ca3d.analysis import dynamics, experiments, influence, metrics, search
+from ca3d.analysis import banks, dynamics, experiments, influence, metrics, search
 from ca3d.render3D import scenes
-from ca3d.rulesets import families, hierarchy, life, saved, wolfram
+from ca3d.rulesets import cityscape, families, hierarchy, life, saved, wolfram
 
 
 def checkerboard(shape):
@@ -247,10 +247,75 @@ def test_samplers():
     assert np.all(lam.sum(axis=1) == 128)
 
 
-def test_families_select_matches_the_notes():
-    seeds = np.array([life.parse_bs(r) for r in families.SLOW_SEEDS])
-    candidates = families.perturbed(seeds, 4, 60, np.random.default_rng(7))
-    assert families.select('slow', candidates).sum() == 80
+def test_family_pools_hold_members_of_their_family():
+    # a sample of each pool still passes its family's own test
+    pools = families.load_pools()
+    for name in families.FAMILIES:
+        sample = pools[name][::max(1, len(pools[name]) // 8)][:8]
+        assert families.select(name, sample).all(), name
+
+
+def test_pool_traits_and_limited_draws():
+    pools = families.load_pools()
+    traits = families.load_traits(pools)
+    for name in families.FAMILIES:
+        assert all(len(traits[name][t]) == len(pools[name]) for t in families.TRAITS), name
+        s = families.sliders(name, traits)
+        assert s.shape == (len(pools[name]), len(families.TRAITS)) and (s >= 0).all() and (s <= 1).all()
+    # a plan of family names draws exactly as before; a limited entry stays within its limits
+    rng_a, rng_b = np.random.default_rng(3), np.random.default_rng(3)
+    plain = hierarchy.banks_from_plan(pools, cityscape.PLAN, rng_a)
+    assert np.array_equal(families.draw_plan(cityscape.PLAN, rng_b, pools), plain)
+    calm = families.allowed('dead', {'activity': (0, 0.5)}, traits)
+    s = families.sliders('dead', traits)[:, families.TRAITS.index('activity')]
+    assert (s[calm] <= 0.5).all() and len(calm) < len(pools['dead'])
+    drawn = families.draw_plan([('dead', {'activity': (0, 0.5)})] * 3, np.random.default_rng(1), pools, traits)
+    members = {pools['dead'][i].tobytes() for i in calm}
+    assert all(t.tobytes() in members for t in drawn)
+
+
+def test_activity_orders_the_ways_dead_banks_handle_material():
+    # dead banks taking over a static city: one clears everything, one leaves spikes,
+    # one leaves gliders (the cityscape's fences), one sustains a churning mass
+    banks = {'clean': 'B4/S ^124,247,385,454', 'spikes': 'B678/S3468 ^109,326,353,432',
+             'fences': 'B58/S4568 ^16,234,343,466', 'mass': 'B348/S12 ^17,134,346,486'}
+    activity = [families.trait_values(life.parse_bank(b))[2] for b in banks.values()]
+    assert activity == sorted(activity), dict(zip(banks, activity))
+    assert activity[0] < 0.01 and activity[-1] > 0.3
+
+
+def test_census_agrees_with_running_each_family():
+    # family verdicts read from a census equal those of running each family's pipeline
+    space = families.LIFE_LIKE
+    known = experiments.RECORDED_SLOW_RULES + ['B678/S3468', 'B038/S0123458', 'B046/S013']
+    tables = np.concatenate([[life.parse_bs(r) for r in known],
+                             space.enumerate()[np.random.default_rng(11).choice(2 ** 18, 36, replace=False)]])
+    found = banks.census(space, tables, families.SOUPS, jobs=2, log=None)
+    for name, pipeline in families.FAMILIES.items():
+        assert np.array_equal(found.select(pipeline), families.select(name, tables)), name
+
+
+def test_census_cache_and_enumeration(tmp_path):
+    w = dynamics.Wolfram(1)
+    assert np.array_equal(w.enumerate()[30], w.table(30))
+    t = dynamics.Totalistic(ndim=1)                 # 6-entry tables: 64 rules
+    assert np.array_equal(t.enumerate()[5], [1, 0, 1, 0, 0, 0])
+    with pytest.raises(ValueError):
+        dynamics.Moore().enumerate()
+    soups = {'coin': banks.Soup(dynamics.Assay(n=32, init='coin'), [search.Criterion('density', None)])}
+    path = tmp_path / 'census.npz'
+    first = banks.cached(path, t, soups, jobs=1, log=None)
+    again = banks.cached(path, t, soups, jobs=1, log=None)
+    assert again.complete and np.array_equal(first.values['coin.density'], again.values['coin.density'])
+    other = {'coin': banks.Soup(dynamics.Assay(n=48, init='coin'), soups['coin'].criteria)}
+    assert banks.Census.load(path, t, other) is None
+
+
+def test_recorded_slow_criteria_match_the_notes():
+    # the slow family as recorded keeps 80 of the 240 4-flip perturbations of its rules
+    seeds = np.array([life.parse_bs(r) for r in experiments.RECORDED_SLOW_RULES])
+    candidates = search.perturbations(seeds, 4, 60, np.random.default_rng(7), expand=life.expand_to_moore)
+    assert experiments.RECORDED_FAMILIES['slow'].select(dynamics.Moore(), candidates).sum() == 80
 
 
 def test_tables_and_targets():

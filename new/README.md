@@ -22,8 +22,10 @@ python -m venv .venv
 .venv/Scripts/python scripts/render_gallery.py --saved                # saved rules -> out/gallery/saved/
 ```
 
-The first hierarchical scene builds the rule pools (~2 min) and caches them in
-`data/rule_pools.npz`.
+The rule pools come ready in `data/rule_pools.npz`. Rebuilding them (after changing a
+family in `rulesets/families.py`) first measures every life-like rule into
+`data/bank_census.npz`. That file is not committed; it takes about 12 minutes on 20
+processes, and is then cached.
 
 ## Layout
 
@@ -39,8 +41,8 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `wolfram.py` | 1D binary CA of any radius; `lsb`/`msb` rule numbering |
 | `life.py` | 2D B/S and 512-entry Moore rules, expansion, rule rotation |
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
-| `families.py` | dead / static / slow / edge / complex rule families and the pools drawn from them |
-| `cityscape.py` | the cityscape configuration (`make`), its context plans and measured profile |
+| `families.py` | rule families (dead, static, complex, edge, slow, erode, grow, drift, frozen, glide), the pools new rules are drawn from, and each pool table's traits (density, spindly, activity) for drawing within slider limits |
+| `cityscape.py` | the reference cityscape (its rule tables and `make`), `draw_banks` for new rule sets in its style, context plans and measured profile |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
 | `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain |
@@ -57,6 +59,7 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, `cityscape`.
 | `metrics.py` | every measure, for 2D grids and 3D volumes (batched), with a registry of what values read as |
 | `dynamics.py` | rule spaces (1D Wolfram, 2D/3D outer-totalistic, 2D Moore), assays (how a rule is tested), lazily measured trials |
 | `search.py` | bands, criteria, staged pipelines, candidate samplers, target profiles, parameter sweeps, result tables |
+| `banks.py` | rule banks measured on their own: a census of any rule set (every life-like rule, say) from fixed starts, kept as a table and queried by family |
 | `influence.py` | hierarchy coupling tests: pinning, one-cell perturbation, pattern traffic, uniform vs effective parent sensitivity, XOR coupling |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
 
@@ -81,7 +84,10 @@ the cell (nearest parent = most significant bit). Layer *i* updates when
 `t % period == phase`, with `period = scale` and staggered `phase = log2(period)` so
 no step updates every layer. The cityscape gives the fine layer's 8 contexts rules
 from the families `dead, dead, static, static, static, static, complex, complex`, the
-coarse layers rules from the slow pool, and starts layer 0 from patchy blobs.
+coarse layers rules from the slow pool, and starts layer 0 from patchy blobs. The
+reference cityscape is one such draw, stored as its rule tables
+(`cityscape.REFERENCE_BANKS`); `cityscape.make()` builds it, and
+`cityscape.make(cityscape.draw_banks(plan, seed))` a new city in the same style.
 
 Rotation turns every rule bank 90 degrees mid-run, changing the direction structures
 grow in. `RotateEvery(period)` turns at fixed intervals; `RotateOnDensityLadder` turns
@@ -148,7 +154,8 @@ Measurement traps the code handles explicitly:
 ## Saved rules
 
 Finds worth keeping go into `data/saved_rules.json` (`ca3d.rulesets.saved`): the rule
-(B/S notation, a hex rule number, or a 512-entry Moore table as hex), the settings it
+(B/S notation, a hex rule number, a 512-entry Moore table as hex, or every rule bank of
+a hierarchical CA), the settings it
 was found and looked good under, what it measured, how it was found, and a note. A
 search is cheap to rerun but hard to rerun identically; the catalogue keeps the result.
 
@@ -158,7 +165,8 @@ search is cheap to rerun but hard to rerun identically; the catalogue keeps the 
 .venv/Scripts/python scripts/find_rules.py ... --keep my_rule         # save the first survivor
 ```
 
-From Python: `saved.get(name).table()`, `.assay()`, `saved.keep(entry)`, `saved.drop(name)`.
+From Python: `saved.get(name).table()`, `.assay()`, `.build()` (hierarchical entries),
+`saved.keep(entry)`, `saved.drop(name)`.
 Saved so far:
 
 | name | what it is |
@@ -168,7 +176,7 @@ Saved so far:
 | `b46_s0135678`, `b47_s04567` | life-like rules that are compact, slow and in the complex band: plateaus with towers |
 | `b4_s2347`, `b578_s0134578` | the same family: thin tower fields |
 | `b11_14_s3_11` | the one survivor of the native 3D census |
-| `cityscape_2_4_2`, `cityscape_2_5_1` | the cityscape and the plan nearest its profile |
+| `cityscape_2_4_2`, `cityscape_2_5_1` | the reference cityscape, and a variant with one complex context made static (the plan nearest its profile) |
 
 A profile match is necessary, not sufficient: the all-complex plan also matched the
 cityscape's density, pillars, void and streaks, but renders as a uniform block of

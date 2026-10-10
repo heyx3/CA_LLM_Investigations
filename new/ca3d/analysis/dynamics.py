@@ -67,6 +67,19 @@ class RuleSpace:
         given seed gives different tables."""
         return rng.integers(0, 2, (count, self.size)).astype(np.uint8)
 
+    def enumerate(self, limit=2 ** 20):
+        """Every table of the space, row k having entry i = bit i of k.  Only for spaces
+        small enough to list (2**size tables, at most `limit`): life-like rules (2**18)
+        yes, Moore rules (2**512) no."""
+        _check_listable(self.size, limit)
+        codes = np.arange(2 ** self.size, dtype=np.int64)
+        return ((codes[:, None] >> np.arange(self.size)) & 1).astype(np.uint8)
+
+
+def _check_listable(size, limit):
+    if 2 ** size > limit:
+        raise ValueError(f'2**{size} rules is too many to list')
+
 
 @dataclass(frozen=True)
 class Wolfram(RuleSpace):
@@ -91,11 +104,15 @@ class Wolfram(RuleSpace):
         digits = self.size // 4 if self.size >= 4 else 1
         return f'{wolfram.rule_number(table, self.bit_order):0{digits}x}'
 
+    def enumerate(self, limit=2 ** 20):
+        """Every rule of the space, row k being rule number k (radius 1: 256 rules;
+        radius 2 has 2**32)."""
+        _check_listable(self.size, limit)
+        return np.array([self.table(r) for r in range(2 ** self.size)], np.uint8)
+
     def all_rules(self):
         """Every rule of the space (only sensible for radius 1: 256 rules)."""
-        if self.size > 16:
-            raise ValueError(f'2**{self.size} rules is too many to enumerate')
-        return np.array([self.table(r) for r in range(2 ** self.size)])
+        return self.enumerate()
 
 
 @dataclass(frozen=True)
@@ -199,14 +216,8 @@ class Moore(RuleSpace):
     def describe(self, table):
         """Nearest totalistic rule (majority output per own state and count) and how
         many entries differ from it, e.g. 'B5/S234678 ~4'."""
-        table = np.asarray(table)
-        nearest = np.zeros(18, np.uint8)
-        for own in (0, 1):
-            for count in range(9):
-                cells = table[own * 256:(own + 1) * 256][life.POPCOUNT == count]
-                nearest[own * 9 + count] = cells.mean() > 0.5
-        flips = int((life.expand_to_moore(nearest) != table).sum())
-        return life.format_bs(nearest) + (f' ~{flips}' if flips else '')
+        nearest, flips = life.nearest_bs(table)
+        return life.format_bs(nearest) + (f' ~{len(flips)}' if len(flips) else '')
 
 
 def space_for(tables):

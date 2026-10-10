@@ -124,6 +124,51 @@ def expand_to_moore(table18):
     return table18[..., own * 9 + count].astype(np.uint8)
 
 
+def nearest_bs(table512):
+    """The outer-totalistic rule nearest a 512-entry table: for each own state and
+    neighbour count, the majority output over the arrangements with that count.
+    Returns (18-entry table, indices of the entries where the table differs from it)."""
+    table512 = np.asarray(table512, np.uint8)
+    nearest = np.zeros(18, np.uint8)
+    for own in (0, 1):
+        for count in range(9):
+            cells = table512[own * 256:(own + 1) * 256][POPCOUNT == count]
+            nearest[own * 9 + count] = cells.mean() > 0.5
+    return nearest, np.flatnonzero(expand_to_moore(nearest) != table512)
+
+
+# A rule table written down: a B/S rule, plus the Moore entries flipped away from it
+# when there are only a few, otherwise the table's bits as hex.
+MAX_LISTED_FLIPS = 16
+
+
+def format_bank(table512):
+    """A 512-entry table as text, readable where possible:
+
+        'B5/S234678'                    exactly an outer-totalistic rule
+        'B678/S3468 ^109,326,353,432'   that rule with these entries flipped
+        128 hex digits                  anything further than MAX_LISTED_FLIPS entries
+                                        from every B/S rule (np.packbits order)
+    """
+    nearest, flips = nearest_bs(table512)
+    if len(flips) > MAX_LISTED_FLIPS:
+        return np.packbits(np.asarray(table512, np.uint8)).tobytes().hex()
+    text = format_bs(nearest)
+    return text + (' ^' + ','.join(map(str, flips)) if len(flips) else '')
+
+
+def parse_bank(text):
+    """Inverse of `format_bank`: text -> 512-entry uint8 table."""
+    text = text.strip()
+    if re.fullmatch(r'[0-9a-fA-F]{128}', text):
+        return np.unpackbits(np.frombuffer(bytes.fromhex(text), np.uint8)).astype(np.uint8)
+    rule, _, flips = text.partition('^')
+    table = expand_to_moore(parse_bs(rule))
+    for entry in filter(None, flips.split(',')):
+        table[int(entry)] ^= 1
+    return table
+
+
 # ---------------------------------------------------------------- stepping
 
 def step_totalistic(s, table18, boundary='wrap'):

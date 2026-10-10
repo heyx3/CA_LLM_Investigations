@@ -7,17 +7,22 @@ the tests (`tests/test_reproduction.py` and friends) pin the matches listed here
 
 ## The seed-3 cityscape
 
-Reproduced exactly except for its two `complex` contexts:
+Reproduced exactly except for its two `complex` contexts.  Its rule tables (rule draw 3
+of the 2/4/2 plan from the rebuilt pools) are now stored in `cityscape.REFERENCE_BANKS`,
+and the pool-search replays keep the recorded criteria in `analysis/experiments.py`, so
+none of this depends on the family pools staying as they are.
 
-* The dead, static and slow pools replay the earlier pool searches with the same seeds
-  and draw order. The counts match exactly: 156 dead, 71 static, and slow survivors
-  240 / 80 / 39 / 12 (= 371) for 0 / 4 / 12 / 32 flips.
+* The `dead_static` and `slow_perturbation` experiments replay the earlier pool searches
+  with the same seeds and draw order (the pools themselves are now built differently,
+  see the deviations below). The counts match exactly: 156 dead, 71 static, and slow
+  survivors 240 / 80 / 39 / 12 (= 371) for 0 / 4 / 12 / 32 flips.
 * Coarse-layer densities 0.099 / 0.186 / 0.695 and pillar fractions 0.40 / 0.60 / 0.79
   match to every printed digit.
 * Density-ladder rotation steps match for all six recorded seeds.
 * The fine layer gives density 0.189 / pillars 0.47 / void 80.9% (recorded 0.196 /
-  0.46 / 80.2%). The difference is the `complex` pool, whose generator was lost; it is
-  rebuilt from its documented criteria (see `rulesets/families.py`).
+  0.46 / 80.2%). The difference is its two `complex` banks: the generator of the
+  original complex pool was lost, so they were drawn from one rebuilt from its
+  documented criteria.
 
 The patchy start was recorded as "essential", but it is not: the earlier comparison of
 starts replaced only the finest layer's state, and the coarse layers (which never see
@@ -39,9 +44,9 @@ writes them to `out/experiments/`.
 | `layer_contributions` | coarse layers exact (density, change per step 0.0265 / 0.0110 / 0.0150, pillars, median blob 8 / 32 / 64); pinning changes 0.36 / 0.38 / 0.23 (recorded 0.345 / 0.353 / 0.209) |
 | `initial_conditions` | starting only the finest layer gave the same city every time (ours: 0.184-0.189 vs 0.193-0.195, the offset being the complex pool). Starting every layer from the pattern changes the city completely: density 0.004 (sparse points) to 0.454 (half plane), rings give a ring-shaped city |
 | `cityscape_contexts` | vocabulary exact (31% / 65%, 69% / 78%); streak enrichment of the dead and static contexts matches when taken relative to each context's share of *solid* voxels (ctx0 2.78 vs 2.30, ctx3 0.22 vs 0.24, ctx4 3.62 vs 3.52) |
-| `context_plans` | 2/4/2 matches; the context order of the other plans was not recorded. Spread over five rule draws 0.10-0.15, as recorded |
+| `context_plans` | the reference cityscape (the recorded 2/4/2 draw) gives the seed-3 numbers above; every other draw comes from the current pools, so the recorded single draws are not reproduced (nor was the context order of the other plans recorded). Pillar fraction spreads 0.09-0.17 over five rule draws (recorded 0.07-0.15) |
 | `plan_search` | new: target-profile search over all 45 splits |
-| `layer_ablation` | the original draws; no recorded numbers |
+| `layer_ablation` | the original draw procedure, from the current pools; no recorded numbers |
 | `schedule_stagger` | exact: context change 0.0367 -> 0.0422; max firing 4 -> 3; banding drops |
 | `wiring_influence` | all-parents one-cell flips exactly 0.012-0.128, pinning 0.34-0.47 (recorded 0.33-0.50); chain wiring severs layer 3 for two of three seeds (pin 0.008 / 0.000), and one chain table has uniform sensitivity 0.25 but effective 0.004 |
 | `base_rules` | coherence saturates (3.05-3.18 vs 3.06-3.21), as recorded. Part counts swing wildly between rule draws (ECA 4: 10-387, k5 rule B: 30-1,012), so the recorded single-draw 900-1,020 for ordered rules is plausible but not reproduced; over medians the gzip-parts correlation is -0.15 (recorded -0.57). The conventions are identical to the earlier ones, so this is not a convention issue |
@@ -71,6 +76,11 @@ uncertainty:
 
 ## Deliberate deviations
 
+* Rule pools: each family's members come from a census of all 262,144 life-like rules
+  instead of the original random samples, and every perturbed or blended table is
+  checked against its family again (see `rulesets/families.py`).  The reference
+  cityscape and the replayed pool searches don't use the pools (see the seed-3
+  cityscape above), so none of the reproduced numbers move.
 * Lattice gas: bounce-back used to overwrite the bounced particles of half the channels;
   it now conserves particles (tested).
 * Renderer: ray distances are tracked from each ray's origin throughout, which rules

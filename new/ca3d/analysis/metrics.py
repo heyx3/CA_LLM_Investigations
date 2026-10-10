@@ -274,6 +274,28 @@ def anisotropy(X, lag=3, dims=None):
     return _out(c.max(axis=0) - c.min(axis=0))
 
 
+def overlaps(a, b, reach):
+    """sum_x a[x + d] * b[x] for every displacement d of up to `reach` cells along each
+    of the last two axes (periodic), batched over leading axes.  Returns
+    (..., (2 reach + 1)^2) with displacement zero first."""
+    fa = np.fft.rfft2(np.asarray(a, np.float32))
+    fb = np.fft.rfft2(np.asarray(b, np.float32))
+    corr = np.fft.irfft2(fa * np.conj(fb), s=np.shape(a)[-2:])
+    near = np.r_[0:reach + 1, -reach:0]
+    window = corr[..., near, :][..., :, near]
+    return window.reshape(window.shape[:-2] + (-1,))
+
+
+def shift_agreement(a, b, reach):
+    """For binary lattices a and b: the share of a's live cells that are also live in b
+    displaced by up to `reach` cells.  Returns (agreement in place, best agreement at
+    any other displacement).  A pattern that moved between b and a matches better
+    displaced than in place."""
+    live = np.maximum(np.sum(a, axis=(-2, -1)), 1).astype(np.float64)
+    share = overlaps(a, b, reach) / live[..., None]
+    return share[..., 0], share[..., 1:].max(axis=-1)
+
+
 def fractal_dimension(X, scales=(1, 2, 4, 8, 16)):
     """Box-counting dimension: cover the array with boxes of side b, count the boxes
     that contain any live cell, and fit the slope of log(count) against log(1/b) over

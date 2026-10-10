@@ -218,7 +218,8 @@ def hierarchy_sg0(seed=0, size=None):
     n = size or 128
     rng = np.random.default_rng(seed)
     bs = lambda rules: np.array([life.parse_bs(r) for r in rules])
-    banks = [bs(families.EDGE_OF_CHAOS),
+    banks = [bs(['B012458/S134568', 'B15/S012378', 'B05/S0268', 'B3/S245678',     # edge of chaos
+                 'B058/S12458', 'B3456/S2567', 'B458/S24567', 'B06/S15']),
              bs(['B356/S5678', 'B578/S1235678', 'B5/S234678', 'B578/S1235678']),
              bs(['B5/S234678', 'B5/S234678']),
              bs(['B578/S1235678'])]
@@ -231,7 +232,7 @@ def hierarchy_sg0(seed=0, size=None):
 @scene
 def hierarchy_moore(seed=0, size=None):
     """Non-totalistic (512-bit) hierarchy: slow coarse layers, edge-of-chaos fine layer,
-    uniform random start."""
+    uniform random start.  Rules drawn at random from the edge and slow families."""
     n = size or 160
     pools = families.load_pools()
     rng = np.random.default_rng(seed)
@@ -245,10 +246,11 @@ def hierarchy_moore(seed=0, size=None):
 
 @scene
 def cityscape(seed=3, size=None):
-    """The cityscape: 2 dead / 4 static / 2 complex contexts on the fine layer.  Seed 3
-    is the reference cityscape."""
+    """The reference cityscape (cityscape.REFERENCE_BANKS: 2 dead / 4 static / 2
+    complex contexts on the fine layer).  `seed` picks the starting state; 3 is the
+    reference render."""
     n = size or 160
-    return _hierarchy_scene(city.make(seed, n), n, colour='height')
+    return _hierarchy_scene(city.make(n=n, ic_seed=seed), n, colour='height')
 
 
 @scene
@@ -256,7 +258,7 @@ def cityscape_rotating(seed=3, size=None):
     """Cityscape whose rules all turn 90 degrees every 20 steps: the diagonal struts
     change direction as the structure builds upward (periods 8 / 20 / 40 were tried)."""
     n = size or 160
-    ca = city.make(seed, n, rotation=hierarchy.RotateEvery(20))
+    ca = city.make(n=n, ic_seed=seed, rotation=hierarchy.RotateEvery(20))
     return _hierarchy_scene(ca, n, colour='height')
 
 
@@ -264,9 +266,9 @@ def cityscape_rotating(seed=3, size=None):
 def cityscape_ladder(seed=3, size=None):
     """Rotation each time the coarsest layer's density climbs another 0.05: turns come
     at seed-dependent heights, clustered low where the coarse layer fills fastest.
-    `seed` varies only the initial condition; the rules are the seed-3 cityscape's."""
+    `seed` varies only the initial condition; the rules are the reference cityscape's."""
     n = size or 160
-    ca = city.make(3, n, ic_seed=seed, rotation=hierarchy.RotateOnDensityLadder(0.05))
+    ca = city.make(n=n, ic_seed=seed, rotation=hierarchy.RotateOnDensityLadder(0.05))
     return _hierarchy_scene(ca, round(n * 2 / 3), colour='height')   # 107 steps at n = 160
 
 
@@ -275,14 +277,17 @@ def cityscape_hsv(seed=3, size=None):
     """The cityscape coloured by its coarse layers: hue from layer 3, value from layer 2,
     saturation from layer 1, each box-smoothed."""
     n = size or 160
-    return _hierarchy_scene(city.make(seed, n), n, colour='hsv')
+    return _hierarchy_scene(city.make(n=n, ic_seed=seed), n, colour='hsv')
 
 
 @scene
 def cityscape_twin(seed=3, size=None):
-    """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8)."""
+    """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8).
+    Its plan was not recorded: the cityscape's plan twice, rules drawn at random from
+    the families."""
     n = size or 160
-    ca = city.make(seed, n, plan=city.PLAN * 2, scales=(1, 1, 2, 4, 8))
+    scales = (1, 1, 2, 4, 8)
+    ca = city.make(city.draw_banks(city.PLAN * 2, seed, scales), n, scales, ic_seed=seed)
     return _hierarchy_scene(ca, n, colour='height')
 
 
@@ -291,18 +296,17 @@ def cityscape_twin(seed=3, size=None):
 def from_saved(name, seed=None, size=None):
     """A scene from a saved entry (rulesets.saved).  2D rules show their space-time
     volume from the soup they were found with, 3D rules their final state; deposition
-    and cityscape entries are rebuilt from their settings.  `seed` replaces the soup
-    (or rule-draw) seed and `size` the lattice edge."""
+    and hierarchy entries are rebuilt from their settings.  `seed` replaces the soup
+    (or, for a hierarchy, the starting-state) seed and `size` the lattice edge."""
     entry = saved.get(name)
     settings = dict(entry.settings)
     if entry.kind == 'deposition':
         settings.update({k: v for k, v in (('n', size), ('seed', seed)) if v is not None})
         st, steps, why = deposition.frozen_deposition(**settings)
         return Scene(st == deposition.FROZEN, info={'steps': steps, 'stop': why})
-    if entry.kind == 'cityscape':
+    if entry.kind == 'hierarchy':
         n = size or settings.get('n', 160)
-        ca = city.make(settings.get('seed', 3) if seed is None else seed, n, settings['plan'])
-        return _hierarchy_scene(ca, n, colour='height')
+        return _hierarchy_scene(entry.build(n, seed), n, colour='height')
     if entry.kind == 'wolfram':
         raise ValueError('1D rules make images, not volumes: use scripts/find_rules.py --render')
     assay = entry.assay()

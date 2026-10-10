@@ -2,3 +2,4 @@
 __pycache__/
 .pytest_cache/
 out/
+data/bank_census.npz

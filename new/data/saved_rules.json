@@ -172,21 +172,88 @@
   },
   {
     "name": "cityscape_2_4_2",
-    "kind": "cityscape",
+    "kind": "hierarchy",
     "rule": "",
     "settings": {
-      "plan": [
-        "dead",
-        "dead",
-        "static",
-        "static",
-        "static",
-        "static",
-        "complex",
-        "complex"
+      "scales": [
+        1,
+        2,
+        4,
+        8
       ],
-      "seed": 3,
-      "n": 160
+      "n": 160,
+      "ic_seed": 3,
+      "start": "blobs",
+      "banks": [
+        [
+          [
+            "dead",
+            "B678/S3468 ^109,326,353,432"
+          ],
+          [
+            "dead",
+            "B58/S4568 ^16,234,343,466"
+          ],
+          [
+            "static",
+            "B038/S0123458 ^259,361,382,500"
+          ],
+          [
+            "static",
+            "B24/S1234568 ^14,140,214,495"
+          ],
+          [
+            "static",
+            "B07/S01238 ^39,363,365,492"
+          ],
+          [
+            "static",
+            "B0128/S01234568 ^141,187,287,417"
+          ],
+          [
+            "complex",
+            "B046/S013 ^47,114,324,420"
+          ],
+          [
+            "complex",
+            "B04678/S015 ^30,44,74,431"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B356/S5678"
+          ],
+          [
+            "slow",
+            "B356/S5678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B578/S1235678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B037/S245678"
+          ]
+        ]
+      ]
     },
     "measures": {
       "density": 0.1887,
@@ -194,26 +261,93 @@
       "void": 0.8087,
       "streaks": 0.0251
     },
-    "found_by": "analysis/experiments.py plan_search",
-    "notes": "The cityscape itself (2 dead / 4 static / 2 complex), for reference; its complex contexts use the rebuilt pool."
+    "found_by": "analysis/experiments.py plan_search; rule draw 3 of its plan from the original family pools",
+    "notes": "The reference cityscape (2 dead / 4 static / 2 complex contexts): the same rule tables as cityscape.REFERENCE_BANKS."
   },
   {
     "name": "cityscape_2_5_1",
-    "kind": "cityscape",
+    "kind": "hierarchy",
     "rule": "",
     "settings": {
-      "plan": [
-        "dead",
-        "dead",
-        "static",
-        "static",
-        "static",
-        "static",
-        "static",
-        "complex"
+      "scales": [
+        1,
+        2,
+        4,
+        8
       ],
-      "seed": 3,
-      "n": 160
+      "n": 160,
+      "ic_seed": 3,
+      "start": "blobs",
+      "banks": [
+        [
+          [
+            "dead",
+            "B678/S3468 ^109,326,353,432"
+          ],
+          [
+            "dead",
+            "B58/S4568 ^16,234,343,466"
+          ],
+          [
+            "static",
+            "B038/S0123458 ^259,361,382,500"
+          ],
+          [
+            "static",
+            "B24/S1234568 ^14,140,214,495"
+          ],
+          [
+            "static",
+            "B07/S01238 ^39,363,365,492"
+          ],
+          [
+            "static",
+            "B0128/S01234568 ^141,187,287,417"
+          ],
+          [
+            "static",
+            "B2/S2345678 ^102,187,284,443"
+          ],
+          [
+            "complex",
+            "B04678/S015 ^30,44,74,431"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B356/S5678"
+          ],
+          [
+            "slow",
+            "B356/S5678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B578/S1235678"
+          ],
+          [
+            "slow",
+            "B5/S234678"
+          ]
+        ],
+        [
+          [
+            "slow",
+            "B037/S245678"
+          ]
+        ]
+      ]
     },
     "measures": {
       "density": 0.195,
@@ -221,7 +355,7 @@
       "void": 0.8028,
       "streaks": 0.0303
     },
-    "found_by": "analysis/experiments.py plan_search (distance 0.034 to the recorded profile)",
-    "notes": "One complex context swapped for static: the nearest run to the recorded cityscape profile."
+    "found_by": "analysis/experiments.py plan_search (distance 0.034 to the recorded profile); rule draw 3 of its plan from the original family pools",
+    "notes": "The reference cityscape with context L0.110 static instead of complex: the nearest run to the recorded cityscape profile.  Every other bank is the reference's."
   }
 ]

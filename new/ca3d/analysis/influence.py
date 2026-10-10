@@ -1,7 +1,7 @@
 """Coupling tests for the hierarchical CA: is a layer's influence real or decorative?
 
 Most functions take `make`, a zero-argument function returning a fresh
-HierarchicalCA (e.g. `lambda: cityscape.make(3)`), so every variant starts from
+HierarchicalCA (e.g. `cityscape.make`), so every variant starts from
 identical rules and states and only the intervention differs.
 
   pin_layers          Freeze each layer at its initial state and measure how much of the

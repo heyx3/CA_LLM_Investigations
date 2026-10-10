@@ -26,7 +26,8 @@ No aesthetic score is computed; the change measures are:
                       unswapped runs' own spread over initial conditions is the noise floor
     profile_distance  distance to the profile recorded for the original cityscape
 
-    python scripts/swap_banks.py                              # every pair of slots, seed 3
+    python scripts/swap_banks.py                              # every pair of slots, the reference
+    python scripts/swap_banks.py --seed 7 --plan 4/2/2        # a random rule draw of another plan
     python scripts/swap_banks.py --kind "between layers, within family"
     python scripts/swap_banks.py --pairs L0.011:L2.1 L0.000:L0.111
     python scripts/swap_banks.py --mode copy --ic-seeds 3 4 --no-render
@@ -35,7 +36,10 @@ Slot names are L<layer>.<context bits>, the bits being that layer's parents near
 L0.110 is layer 0's bank where layer 1 = 1, layer 2 = 1 and layer 3 = 0.  The coarsest
 layer has a single bank, L3.
 
-Output (default out/swaps/seed<seed>-<mode>/): summary.txt, runs.csv (one row per run),
+By default the banks are the reference cityscape's (cityscape.REFERENCE_BANKS); with
+--seed they are rule draw `seed` of --plan from the family pools.
+
+Output (default out/swaps/<reference or seed<seed>>-<mode>/): summary.txt, runs.csv (one row per run),
 swaps.csv (means over initial conditions), slots.csv, renders/*.png, and one contact sheet
 per kind with thumbnails ordered from least to most shifted.
 """
@@ -49,7 +53,7 @@ import sys
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -60,7 +64,7 @@ sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                            # noqa: E402
 from ca3d.render3D.render import Camera, Lighting, render, save_png   # noqa: E402
-from ca3d.rulesets import cityscape as city, families, hierarchy      # noqa: E402
+from ca3d.rulesets import cityscape as city, families                 # noqa: E402
 
 MEASURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'parts', 'largest_part',
             'change', 'corr_time')
@@ -160,7 +164,7 @@ def edits_for(slots, mode, pairs=None, kinds=None):
 
 # ---------------------------------------------------------------- running
 
-_CONFIG = {}            # seed, n, steps, plan, res and the pools, in every process
+_CONFIG = {}            # seed, first_start, n, steps, plan, res and the pools, in every process
 
 
 def configure(config):
@@ -168,15 +172,14 @@ def configure(config):
 
 
 def build(edit=None, ic_seed=None):
-    """The configured cityscape, with `edit` applied to its banks."""
+    """The configured cityscape (the reference, or rule draw `seed` of the plan), with
+    `edit` applied to its banks, started from `ic_seed` (default: the first start)."""
     c = _CONFIG
-    ca = city.make(c['seed'], c['n'], c['plan'], pools=c['pools'], ic_seed=ic_seed)
-    if edit is None:
-        return ca
-    banks = [layer.rules.copy() for layer in ca.layers]
-    edit.apply(banks)
-    layers = [replace(layer, rules=bank) for layer, bank in zip(ca.layers, banks)]
-    return hierarchy.HierarchicalCA(layers, ca.states)
+    banks = (city.reference_banks() if c['seed'] is None
+             else city.draw_banks(c['plan'], c['seed'], pools=c['pools']))
+    if edit is not None:
+        edit.apply(banks)
+    return city.make(banks, c['n'], ic_seed=c['first_start'] if ic_seed is None else ic_seed)
 
 
 @functools.lru_cache(maxsize=None)
@@ -309,7 +312,7 @@ SHOW = ['swap', 'families', 'jaccard', 'shift', 'density', 'pillars', 'void', 's
 
 
 def report(log, args, ic_seeds, plan, slots_table, base, floor, unrelated, swaps, noops):
-    log(f'Cityscape bank {PLURAL[args.mode]}: rule seed {args.seed}, plan {args.plan} '
+    log(f'Cityscape bank {PLURAL[args.mode]}: {args.rules}, plan {args.plan} '
         f'({", ".join(plan)}), n {args.n}, {args.steps} steps, starts {ic_seeds}')
     log('slot names: L<layer>.<parent bits, nearest parent first>\n')
 
@@ -366,12 +369,13 @@ def report(log, args, ic_seeds, plan, slots_table, base, floor, unrelated, swaps
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--seed', type=int, default=3, help='rule draw (3 = the cityscape)')
+    p.add_argument('--seed', type=int, default=None,
+                   help='rule draw of --plan from the families (default: the reference cityscape)')
     p.add_argument('--plan', choices=list(city.PLANS), default='2/4/2')
     p.add_argument('--n', type=int, default=160, help='lattice edge')
     p.add_argument('--steps', type=int, default=None, help='default: n')
     p.add_argument('--ic-seeds', type=int, nargs='+', default=None,
-                   help='initial conditions (default: seed to seed+3); the first is rendered')
+                   help='initial conditions (default: 3 to 6, or seed to seed+3); the first is rendered')
     p.add_argument('--mode', choices=('swap', 'copy'), default='swap')
     p.add_argument('--kind', choices=KINDS, action='append', help='only this kind (repeatable)')
     p.add_argument('--pairs', nargs='+', metavar='A:B', help='only these slot pairs, e.g. L0.011:L2.1')
@@ -382,13 +386,19 @@ def main():
     p.add_argument('--out', type=Path, default=None)
     args = p.parse_args()
     args.steps = args.steps or args.n
-    ic_seeds = args.ic_seeds or [args.seed + k for k in range(4)]
+    if args.seed is None and args.plan != '2/4/2':
+        p.error('the reference cityscape has plan 2/4/2; give --seed to draw rules for another plan')
+    args.rules = 'the reference cityscape' if args.seed is None else f'rule draw {args.seed}'
+    first = 3 if args.seed is None else args.seed
+    ic_seeds = args.ic_seeds or [first + k for k in range(4)]
     plan = city.PLANS[args.plan]
-    out = args.out or ROOT / 'out' / 'swaps' / f'seed{args.seed}-{args.mode}'
+    label = 'reference' if args.seed is None else f'seed{args.seed}'
+    out = args.out or ROOT / 'out' / 'swaps' / f'{label}-{args.mode}'
     renders = out / 'renders'
     renders.mkdir(parents=True, exist_ok=True)
 
-    config = dict(seed=args.seed, n=args.n, steps=args.steps, plan=plan, res=args.res)
+    config = dict(seed=args.seed, first_start=ic_seeds[0], n=args.n, steps=args.steps, plan=plan,
+                  res=args.res)
     configure(config)
     ca = build()
     banks = [layer.rules for layer in ca.layers]
@@ -487,7 +497,7 @@ def main():
                                  f'dens {r["density"]:.3f}') for r in group]
             name = kind.replace(', ', '_').replace(' ', '-')
             contact_sheet(entries, out / f'sheet_{name}.png',
-                          f'{kind} ({args.mode}, seed {args.seed}, start {ic_seeds[0]}), '
+                          f'{kind} ({args.mode}, {args.rules}, start {ic_seeds[0]}), '
                           'least to most shifted', args.thumb)
     print(f'written to {out}')
 

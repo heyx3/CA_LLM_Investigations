@@ -111,6 +111,36 @@ table. The cityscape gives each of the fine layer's 8 contexts a rule from one f
 | complex | partial damage spreading, sparse | ragged texture, horizontal streaks |
 | slow | compact and slowly changing | used by the coarse layers |
 | edge | partial damage spreading, mid density | edge-of-chaos rules (older configurations) |
+| erode | from a dense start, decays slowly but is still there | tapering material |
+| grow | from a sparse start, fills compact regions, then settles | solid blocks filling a territory |
+| drift | patterns translate | slanted struts |
+| frozen | compact, stops changing | coarse layers: a fixed layout |
+| glide | compact and translating | coarse layers: leaning structure |
+
+A **census** (`analysis/banks.py`) runs every rule of a set once from a few fixed starts
+and keeps the measured values as a table, so questions such as "which rules are slow?"
+are answered from the table instead of by running rules again. All 262,144 life-like
+rules have been measured this way, so a family's B/S members are simply the rows whose
+values fall in its bands. A family's **pool** is a sample of its members, each with a
+few table entries flipped, for drawing "some rule of this family" at random (no B/S
+rule translates, so the drift and glide pools are blends instead; see `families.py`).
+
+Members of one family still differ, so every pool table also carries three **traits**,
+each with a 0-1 **slider**: its position among its family's pool (0.5 means typical
+for the family). **Density** is the table's final density from soups 85%, 50% and
+25% full. **Spindly** is the share of its final live cells with at most one live
+neighbour: a static bank's spindly cells become one-voxel vertical threads. **Activity**
+is how much stays active once it has settled, both from those soups and in a
+**handover test**, where the table takes over the streets between blocks of static
+material, as a bank does in a city. Dead banks range from clearing everything (low
+activity) through leaving spikes, gliders or moss on the walls to sustaining a
+churning mass (high); the dense-start test cannot tell these apart. A plan entry can
+limit its draw by sliders, e.g. `('dead', {'activity': (0, 0.8)})`.
+
+The **reference cityscape** is one draw from the pools, kept as its 15 rule tables
+(`cityscape.REFERENCE_BANKS`, each written as a B/S rule plus the few table entries
+flipped away from it), so it never changes when the families do. Drawing again
+(`cityscape.draw_banks(plan, seed)`) gives a different city in the same style.
 
 ## 6. Running and testing rules (`analysis/dynamics.py`)
 

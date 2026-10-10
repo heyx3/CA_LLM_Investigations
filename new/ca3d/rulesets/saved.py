@@ -20,7 +20,13 @@ Kinds and how `rule` is written:
   moore         the 512-entry table as 128 hex digits (np.packbits order); the entry's
                 `notes` give its nearest B/S rule
   deposition    no rule string: settings are rulesets.deposition.frozen_deposition's
-  cityscape     no rule string: settings are a plan and a seed for cityscape.make
+  hierarchy     no rule string: a hierarchical CA (rulesets.hierarchy) with its rule
+                banks written out in settings['banks'], layer by layer, as
+                [family, rule] pairs in life.format_bank notation ('B678/S3468
+                ^109,326,353,432': a B/S rule with those entries flipped).  The other
+                settings say how it is started and run: scales, n, ic_seed, start and
+                coarse_start (names in rulesets.initial.STARTS), optional periods and
+                rotation ({'every': steps} or {'ladder': delta}).  `build()` makes it.
 
 render3D.scenes.from_saved(name) builds a renderable scene from an entry, and
 scripts/render_scene.py accepts saved names as well as scene names.
@@ -34,7 +40,7 @@ import numpy as np
 CATALOGUE = Path(__file__).resolve().parents[2] / 'data' / 'saved_rules.json'
 
 RULE_KINDS = ('wolfram', 'totalistic', 'totalistic3d', 'moore')
-KINDS = RULE_KINDS + ('deposition', 'cityscape')
+KINDS = RULE_KINDS + ('deposition', 'hierarchy')
 
 ASSAY_FIELDS = ('n', 'steps', 'burn', 'p0', 'init', 'seed', 'damage_steps', 'damage_burn',
                 'record_from')
@@ -84,6 +90,29 @@ class Saved:
         """The Assay the rule was found under (its settings that name assay fields)."""
         from ..analysis import dynamics
         return dynamics.Assay(**{k: v for k, v in self.settings.items() if k in ASSAY_FIELDS})
+
+    def banks(self):
+        """A hierarchy entry's rule banks: one (contexts, 512) uint8 array per layer."""
+        from . import hierarchy
+        if self.kind != 'hierarchy':
+            raise ValueError(f'{self.name} is a {self.kind} entry, not a hierarchy')
+        return hierarchy.parse_banks(self.settings['banks'])
+
+    def build(self, n=None, ic_seed=None):
+        """A hierarchy entry as a HierarchicalCA, started as recorded unless `n` or
+        `ic_seed` say otherwise."""
+        from . import cityscape, hierarchy, initial
+        s = self.settings
+        rotation = s.get('rotation')
+        if rotation:
+            (how, value), = rotation.items()
+            rotation = (hierarchy.RotateEvery(value) if how == 'every'
+                        else hierarchy.RotateOnDensityLadder(value))
+        coarse = s.get('coarse_start')
+        return cityscape.make(self.banks(), n or s['n'], tuple(s['scales']), rotation,
+                              s['ic_seed'] if ic_seed is None else ic_seed,
+                              initial.STARTS[s.get('start', 'blobs')],
+                              initial.STARTS[coarse] if coarse else None, s.get('periods'))
 
 
 def encode(table):

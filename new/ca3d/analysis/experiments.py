@@ -54,6 +54,32 @@ def _timed(fn):
     return out, time.perf_counter() - t0
 
 
+# ---------------------------------------------------------------- recorded rules
+# What the replays below reproduce: the family criteria and B/S rule lists as recorded
+# when the original rule pools were built.  They are copied here, not read from
+# rulesets.families, so the families can change without changing what is replayed.
+
+RECORDED_DENSE = Assay(p0=0.85, burn=45)      # dense soup: dead and static are judged from it
+RECORDED_COIN = Assay(init='coin')            # fair-coin soup: slow is judged from it
+RECORDED_FAMILIES = {
+    'dead': Pipeline.single([Criterion('density', (None, 0.02))], RECORDED_DENSE),
+    'static': Pipeline.single([Criterion('density', (0.15, 0.85)),
+                               Criterion('change', (None, 0.0008))], RECORDED_DENSE),
+    'slow': Pipeline.single([Criterion('density', (0.15, 0.85)),
+                             Criterion('compactness', search.Band(0.4, inclusive=True)),
+                             Criterion('change', (0.0005, 0.05))], RECORDED_COIN),
+}
+# the whole slow/compact pool found among ~6000 B/S rules (the coarse layers' rules)
+RECORDED_SLOW_RULES = ['B356/S5678', 'B037/S245678', 'B5/S234678', 'B578/S1235678']
+# edge-of-chaos B/S rules (partial damage spreading) of the early totalistic hierarchy
+RECORDED_EDGE_RULES = ['B012458/S134568', 'B15/S012378', 'B05/S0268', 'B3/S245678',
+                       'B058/S12458', 'B3456/S2567', 'B458/S24567', 'B06/S15']
+
+
+def _expand_and_perturb(rules18, flips, variants, rng):
+    return search.perturbations(rules18, flips, variants, rng, expand=life.expand_to_moore)
+
+
 # ================================================================ rule searches
 
 @experiment
@@ -62,7 +88,10 @@ def dead_static(quick=False, log=print):
     (p0 = 0.85)?  Dying and freezing rules are defined by what they do to existing
     material, so a sparse start would never engage them."""
     trials = 900 if quick else 9000
-    found = families.search_dead_static(trials)
+    space = dynamics.Totalistic()
+    tables = search.random_rules(space, trials, _rng(4), draw='coin')
+    values = search.evaluate(space, tables, ['density', 'change'], RECORDED_DENSE)   # one shared run
+    found = {k: tables[RECORDED_FAMILIES[k].passes(values)] for k in ('dead', 'static')}
     t = Table([{'family': k, 'found': len(v), 'of': trials,
                 'examples': ', '.join(life.format_bs(r) for r in v[:4])} for k, v in found.items()])
     _report(log, 'dead and static B/S rules', t, '156 dead, 71 static of 9000')
@@ -74,13 +103,13 @@ def slow_perturbation(quick=False, log=print):
     """Expand the four slow/compact B/S rules to 512 entries, flip k entries, keep what
     is still slow and compact.  Anisotropy (zero for any totalistic rule) grows with k
     while compactness holds, until everything dies."""
-    seeds = np.array([life.parse_bs(r) for r in families.SLOW_SEEDS])
-    slow = families.FAMILIES['slow'].stages[0]
+    seeds = np.array([life.parse_bs(r) for r in RECORDED_SLOW_RULES])
+    slow = RECORDED_FAMILIES['slow'].stages[0]
     pipeline = Pipeline.single(slow.criteria + [Criterion('anisotropy', None)], slow.assay)
     t = Table()
     for k in ((0, 4, 32) if quick else (0, 4, 12, 32, 80, 160)):
-        candidates = families.perturbed(seeds, k, 6 if quick else 60, _rng(7))
-        res = pipeline.run(families.MOORE, candidates)
+        candidates = _expand_and_perturb(seeds, k, 6 if quick else 60, _rng(7))
+        res = pipeline.run(dynamics.Moore(), candidates)
         row = {'flips': k, 'kept': int(res.passed.sum()), 'of': len(candidates)}
         for name in ('compactness', 'change', 'anisotropy'):
             row[name] = float(res.values[name][res.passed].mean()) if res.passed.any() else None
@@ -215,14 +244,13 @@ def _pools():
 
 @experiment
 def layer_contributions(quick=False, log=print):
-    """What each layer of the seed-3 cityscape contributes: per-layer statistics of its
+    """What each layer of the reference cityscape contributes: per-layer statistics of its
     space-time volume (at fine resolution), and how much the fine volume changes when
     that layer is pinned at its initial state."""
-    pools = _pools()
     n = 48 if quick else 160
 
     def make():
-        return cityscape.make(3, n, pools=pools)
+        return cityscape.make(n=n)
     st = make().run(n, record_layers=True)
     pins = {r['layer']: r for r in influence.pin_layers(make, n)}
     t = Table()
@@ -248,9 +276,8 @@ def cityscape_contexts(quick=False, log=print):
     """Which fine-layer contexts the volume runs, which of them make the horizontal
     streaks (enrichment), and whether the streaks are a timing artefact of layer 2's
     updates (schedule confound)."""
-    pools = _pools()
     n = 48 if quick else 160
-    st = cityscape.make(3, n, pools=pools).run(n)
+    st = cityscape.make(n=n).run(n)
     ctx, fine = st.context.astype(np.int64), st.fine
     streak = metrics.streaks(fine)
     # relative to each context's share of the solid voxels: this is what reproduces the
@@ -289,13 +316,12 @@ def initial_conditions(quick=False, log=print):
     finest layer's state gives the same city every time: the coarse layers, which never
     see the fine layer, decide what grows where.  Starting the coarse layers from the
     same pattern (block-averaged to their scales) is what changes the city."""
-    pools = _pools()
     n = 48 if quick else 160
     names = ['blobs', 'uniform', 'sparse_points', 'rings', 'gradient', 'quadrants', 'half_plane']
     labels = {'blobs': 'blobs_fine', 'sparse_points': 'sparse', 'half_plane': 'half'}
 
     def run(start, coarse=None, rotation=None, steps=n):
-        ca = cityscape.make(3, n, pools=pools, start=start, coarse_start=coarse,
+        ca = cityscape.make(n=n, start=start, coarse_start=coarse,
                             rotation=rotation or hierarchy.RotateEvery(40))
         return ca.run(steps).fine
     reference = run(initial.blobs)
@@ -319,7 +345,7 @@ def initial_conditions(quick=False, log=print):
     ladder = Table()
     for label, start in (('blobs', initial.blobs), ('empty', initial.empty),
                          ('full', initial.full)):
-        ca = cityscape.make(3, n, pools=pools, start=start,
+        ca = cityscape.make(n=n, start=start,
                             rotation=hierarchy.RotateOnDensityLadder(0.05))
         st = ca.run(round(n * 2 / 3))
         ladder.add({'fine start': label, 'density': float(st.fine.mean()),
@@ -334,19 +360,27 @@ def initial_conditions(quick=False, log=print):
 def context_plans(quick=False, log=print):
     """The context plan is the central dial: dead / static / complex counts among the
     fine layer's 8 contexts.  Run over several rule draws (seeds), since the spread
-    across draws can be as large as the effect of the plan."""
+    across draws can be as large as the effect of the plan.  The recorded 2 / 4 / 2
+    numbers are the reference cityscape's (rule draw 3 of the original pools), measured
+    on its own; every other draw comes from the current pools."""
     pools = _pools()
     n = 48 if quick else 160
     seeds = (3,) if quick else (3, 4, 5, 6, 7)
-    table = search.sweep(lambda plan, seed: cityscape.make(seed, n, cityscape.PLANS[plan], pools=pools).run(n).fine,
-                         {'plan': list(cityscape.PLANS)}, seeds, ('density', 'pillars', 'void'), log=None)
-    _report(log, 'seed 3', table.where(seed=3), [
-        '2 dead / 4 static / 2 complex: density 0.196, pillars 0.46, void 80.2%',
-        '4 / 2 / 2: 0.227 / 0.45 / 77.2%;  3 / 2 / 3: 0.132 / 0.33 / 86.5%'])
+    names = ('density', 'pillars', 'void')
+    reference = Table([{'plan': '2/4/2', **metrics.measure(cityscape.make(n=n).run(n).fine, names)}])
+    _report(log, 'the reference cityscape', reference,
+            'density 0.196, pillars 0.46, void 80.2% (the gap is its two rebuilt complex banks)')
+
+    def build(plan, seed):
+        banks = cityscape.draw_banks(cityscape.PLANS[plan], seed, pools=pools)
+        return cityscape.make(banks, n, ic_seed=seed).run(n).fine
+    table = search.sweep(build, {'plan': list(cityscape.PLANS)}, seeds, names, log=None)
+    _report(log, 'rule draw 3 from the current pools', table.where(seed=3),
+            'from the original pools: 4 / 2 / 2: 0.227 / 0.45 / 77.2%;  3 / 2 / 3: 0.132 / 0.33 / 86.5%')
     agg = table.aggregate('plan')
     _report(log, f'mean and spread over seeds {seeds}', agg,
             'std across five rule draws was 0.07-0.15 on pillar fraction')
-    return {'runs': table, 'by_plan': agg}
+    return {'reference': reference, 'runs': table, 'by_plan': agg}
 
 
 @experiment
@@ -364,11 +398,12 @@ def plan_search(quick=False, log=print):
     target = search.Target(cityscape.PROFILE)
 
     def build(split, seed):
-        return cityscape.make(seed, n, cityscape.plan_of(split), pools=pools).run(n).fine
+        banks = cityscape.draw_banks(cityscape.plan_of(split), seed, pools=pools)
+        return cityscape.make(banks, n, ic_seed=seed).run(n).fine
     table = search.sweep(build, {'split': splits}, seeds, names, log=None)
     profile = ', '.join(f'{k} {v}' for k, v in cityscape.PROFILE.items())
     _report(log, f'single runs nearest the cityscape profile ({profile})', table.rank(target).head(10),
-            'the seed-3 2/4/2 run is the cityscape itself (its complex contexts are rebuilt)')
+            'with the original pools, draw 3 of plan 2/4/2 is the reference cityscape')
     ranked = table.aggregate('split').rank(target)
     _report(log, f'plans by mean profile over seeds {seeds}', ranked.head(12),
             'more static -> towers; more dead -> sky; more complex -> texture and streaks')
@@ -418,10 +453,10 @@ def schedule_stagger(quick=False, log=print):
     """Aligned schedules (every layer fires on step period - 1, so all four coincide
     every 8th step) against staggered ones (phase = log2(period)), on the early
     totalistic configuration (slow coarse rules, edge-of-chaos fine rules from
-    families.EDGE_OF_CHAOS)."""
+    RECORDED_EDGE_RULES)."""
     n = 64 if quick else 160
-    slow18 = np.array([life.parse_bs(r) for r in families.SLOW_SEEDS])
-    edge18 = np.array([life.parse_bs(r) for r in families.EDGE_OF_CHAOS])
+    slow18 = np.array([life.parse_bs(r) for r in RECORDED_SLOW_RULES])
+    edge18 = np.array([life.parse_bs(r) for r in RECORDED_EDGE_RULES])
     scales = hierarchy.pow2_scales(4)
     t = Table()
     for seed in ((0,) if quick else (0, 1, 2)):
