@@ -28,6 +28,7 @@ import re
 
 import numpy as np
 
+from .lattice import box_sum
 from .rules import apply_table, from_hex, to_hex
 
 # Bit b of the neighbour byte holds the cell at (row + dy, col + dx) for the b-th
@@ -58,8 +59,8 @@ def neighbour_count(s, boundary='wrap'):
     boundary 'wrap' is a torus; 'dead' treats everything outside the grid as dead.
     """
     s = np.asarray(s, np.uint8)
-    if boundary == 'wrap':
-        return sum(shifted(s, dy, dx) for dy, dx in NEIGHBOUR_OFFSETS)
+    if boundary == 'wrap':        # the 3x3 box sum (four rolls) minus the cell itself
+        return box_sum(s, (0,) * (s.ndim - 2) + (1, 1), dtype=np.uint8) - s
     if boundary != 'dead':
         raise ValueError(f"boundary must be 'wrap' or 'dead', not {boundary!r}")
     h, w = s.shape[-2:]
@@ -73,11 +74,31 @@ def totalistic_code(s, boundary='wrap'):
 
 
 def moore_code(s):
-    """Index into a 512-entry table: own * 256 + neighbour byte (periodic boundary)."""
+    """Index into a 512-entry table: own * 256 + neighbour byte (periodic boundary).
+
+    The neighbour byte follows the bit layout drawn above NEIGHBOUR_OFFSETS.  It is
+    built a row at a time: for every row, `triple` packs the cells to the left, centre
+    and right of each position into bits 2, 1, 0.  That is already the layout of the
+    row below the cell (bits 2 1 0), and moved up by 5 of the row above (bits 7 6 5);
+    the cell's own row only contributes its right (bit 3) and left (bit 4) neighbours:
+
+        row above    triple << 5          bits 7 6 5
+        own row      left << 4, right << 3  bits 4 . 3
+        row below    triple               bits 2 1 0
+    """
+    # Speed: every elementwise numpy operation costs about the same, so this uses as
+    # few as possible: one wrapped copy of the lattice, the byte built in uint8 and
+    # widened once at the end.
     s = np.asarray(s, np.uint8)
+    p = np.pad(s, [(0, 0)] * (s.ndim - 2) + [(1, 1), (1, 1)], mode='wrap')
+    right, middle, left = p[..., 2:], p[..., 1:-1], p[..., :-2]      # columns x + 1, x, x - 1
+    triple = right | (middle << 1)
+    triple |= left << 2
+    byte = triple[..., 2:, :] | (triple[..., :-2, :] << 5)           # rows y + 1 and y - 1
+    byte |= right[..., 1:-1, :] << 3
+    byte |= left[..., 1:-1, :] << 4
     code = s.astype(np.uint16) << 8
-    for bit, (dy, dx) in enumerate(NEIGHBOUR_OFFSETS):
-        code |= shifted(s, dy, dx).astype(np.uint16) << bit
+    code |= byte
     return code
 
 
@@ -173,12 +194,12 @@ def parse_bank(text):
 
 def step_totalistic(s, table18, boundary='wrap'):
     """One update of a 2D lattice (or stack of lattices) under an 18-entry B/S table."""
-    return apply_table(table18, totalistic_code(s, boundary)).astype(np.uint8)
+    return apply_table(table18, totalistic_code(s, boundary)).astype(np.uint8, copy=False)
 
 
 def step_moore(s, table512):
     """One update under a 512-entry table (periodic boundary)."""
-    return apply_table(table512, moore_code(s)).astype(np.uint8)
+    return apply_table(table512, moore_code(s)).astype(np.uint8, copy=False)
 
 
 def step_rule(s, table):

@@ -85,7 +85,7 @@ def window_code(state, radius=1):
 
 def step(state, table, radius=1):
     """One update.  `state` may be a batch (B, n) with one table per row (B, P)."""
-    return apply_table(table, window_code(state, radius)).astype(np.uint8)
+    return apply_table(table, window_code(state, radius)).astype(np.uint8, copy=False)
 
 
 def spacetime(init, table, radius=1, steps=None):

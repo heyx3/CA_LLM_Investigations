@@ -140,6 +140,11 @@ def _unit(v):
     return v / np.linalg.norm(v)
 
 
+# The cells of trace's bordered grid.  SOLID must be 1: the occupancy array is copied in
+# as it is, with True becoming 1.
+EMPTY, SOLID, OUTSIDE = 0, 1, 2
+
+
 def trace(occ, origins, direction):
     """March rays from `origins` (N, 3) along one shared `direction` through `occ`.
 
@@ -161,8 +166,10 @@ def trace(occ, origins, direction):
     t0 = (0.0 - origins) * inv
     t1 = (dims - origins) * inv
     t_near, t_far = np.minimum(t0, t1), np.maximum(t0, t1)
-    t_enter, t_exit = t_near.max(axis=1), t_far.min(axis=1)
-    enter_axis = t_near.argmax(axis=1)
+    (nx, ny, nz), (fx, fy, fz) = t_near.T, t_far.T
+    t_enter = np.maximum(np.maximum(nx, ny), nz)
+    t_exit = np.minimum(np.minimum(fx, fy), fz)
+    enter_axis = _first_best(nx, ny, nz, np.greater_equal)    # argmax
     t_start = np.maximum(t_enter, 0.0) + 1e-6           # nudge just inside the grid
     enters = t_exit > t_start
 
@@ -194,27 +201,52 @@ def trace(occ, origins, direction):
         record(r, vox[solid], np.maximum(t_enter[r], 0.0), normals)
     rays, vox, t_next = rays[~solid], vox[~solid], t_next[~solid]
 
+    # Speed.  The march below works on one flat array per axis rather than on (N, 3)
+    # arrays, because numpy reduces along a short axis slowly: tx, ty, tz are the
+    # columns of t_next (each ray's distance to its next x, y and z boundary).  It also
+    # reads a copy of the grid inside a one-voxel OUTSIDE border, indexed by a single
+    # flat position per ray (`at`), so one lookup per step tells whether a ray hit
+    # something, goes on, or has left the grid.
+    tx, ty, tz = (np.ascontiguousarray(t_next[:, a]) for a in range(3))
+
+    grid = np.full(dims + 2, OUTSIDE, np.uint8)         # the grid inside an OUTSIDE border
+    grid[1:-1, 1:-1, 1:-1] = occ                        # True becomes SOLID (== 1), False EMPTY
+    cells = grid.ravel()
+    strides = np.array([(dims[1] + 2) * (dims[2] + 2), dims[2] + 2, 1])
+    at = (vox + 1) @ strides                            # each ray's voxel, as an index into cells
+    move = step * strides                               # index change of a step along each axis
+
     for _ in range(int(dims.sum()) + 3):               # a ray crosses at most X+Y+Z faces
         if rays.size == 0:
             break
-        row = np.arange(rays.size)
-        axis = t_next.argmin(axis=1)                    # axis whose boundary comes first
-        t_cross = t_next[row, axis]
-        vox[row, axis] += step[axis]
-        t_next[row, axis] += t_delta[axis]
+        axis = _first_best(tx, ty, tz, np.less_equal)  # axis whose boundary comes first
+        on_x, on_y, on_z = axis == 0, axis == 1, axis == 2
+        t_cross = np.where(on_x, tx, np.where(on_y, ty, tz))
+        np.add(tx, t_delta[0], out=tx, where=on_x)
+        np.add(ty, t_delta[1], out=ty, where=on_y)
+        np.add(tz, t_delta[2], out=tz, where=on_z)
+        at += move[axis]
 
-        inside = ((vox >= 0) & (vox < dims)).all(axis=1)
-        solid = np.zeros(rays.size, bool)
-        v = vox[inside]
-        solid[inside] = flat[(v[:, 0] * dims[1] + v[:, 1]) * dims[2] + v[:, 2]]
+        cell = cells[at]
+        solid = cell == SOLID
         if solid.any():
             normals = np.zeros((int(solid.sum()), 3))
             a = axis[solid]
             normals[np.arange(a.size), a] = -step[a]
-            record(rays[solid], vox[solid], t_cross[solid], normals)
-        keep = inside & ~solid
-        rays, vox, t_next = rays[keep], vox[keep], t_next[keep]
+            v = np.column_stack(np.unravel_index(at[solid], grid.shape)) - 1
+            record(rays[solid], v, t_cross[solid], normals)
+        keep = cell == EMPTY
+        if not keep.all():
+            rays, at, tx, ty, tz = rays[keep], at[keep], tx[keep], ty[keep], tz[keep]
     return result
+
+
+def _first_best(x, y, z, better):
+    """Per element, which of x, y, z (0, 1, 2) is best, the first on ties: argmin
+    with better=np.less_equal, argmax with np.greater_equal, but without stacking
+    the three into an (N, 3) array."""
+    x_best = better(x, y) & better(x, z)
+    return np.where(x_best, 0, np.where(better(y, z), 1, 2)).astype(np.int8)
 
 
 def primary_rays(shape, camera):

@@ -24,8 +24,8 @@ python -m venv .venv
 
 The rule pools come ready in `data/rule_pools.npz`. Rebuilding them (after changing a
 family in `studies/moore_families.py`) first measures every life-like rule into
-`data/bank_census.npz`. That file is not committed; it takes about 12 minutes on 20
-processes, and is then cached.
+`data/bank_census.npz`. That file is not committed; it took about 8 minutes on Billy's
+20-core desktop (other hardware will differ), and is then cached.
 
 ## Layout
 

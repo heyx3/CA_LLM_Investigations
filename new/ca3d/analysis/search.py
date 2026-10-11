@@ -176,7 +176,8 @@ class Stage:
     criteria: list
     assay: Assay = field(default_factory=Assay)
     name: str = ''
-    chunk: int = 256            # rules run together (memory: chunk x lattice x history)
+    chunk: int = 256            # rules run together (memory: chunk x lattice x history,
+                                # briefly twice that when a history is turned time-last)
 
 
 @dataclass

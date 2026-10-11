@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..rulesets import life, wolfram
-from ..rulesets.lattice import box_sum
+from ..rulesets.lattice import box_sum, time_last
 from ..rulesets.rules import apply_table
 
 
@@ -144,7 +144,7 @@ class Totalistic(RuleSpace):
         small = np.uint8 if self.neighbours < 255 else np.int32      # uint8 is faster
         box = box_sum(states, (0,) * batch + (self.radius,) * self.ndim, dtype=small)
         code = states.astype(np.int32) * (self.neighbours + 1) + (box - states)
-        return apply_table(tables, code).astype(np.uint8)
+        return apply_table(tables, code).astype(np.uint8, copy=False)
 
     def describe(self, table):
         """B/S notation: digits for life-like rules, ranges ('B5-7/S4,6') beyond 9."""
@@ -242,6 +242,14 @@ class Trajectory:
     history: np.ndarray | None = None  # (B, *lattice, T) bool, time last; frame t = before step t
 
 
+def _is_check_step(t):
+    """Whether a run looks for rules that have stopped changing after step t (see
+    Assay.run): at steps 0, 1, 2, 4, 8, 16...  Most rules that ever settle do so early,
+    so the checks are dense at the start and sparse later, where the comparison would
+    rarely pay for itself."""
+    return t & (t - 1) == 0           # t is zero or a power of two
+
+
 @dataclass(frozen=True)
 class Assay:
     """How each candidate rule is tested.
@@ -285,22 +293,49 @@ class Assay:
     def run(self, space, tables, record=False):
         """Run every table in `tables` (B, size) from the shared soup for `steps`
         steps.  With record=True the space-time history is kept as well (memory:
-        B x lattice x steps)."""
+        B x lattice x steps, and about twice that for a moment at the end, while the
+        record is turned time-last).
+
+        A rule whose step leaves its lattice unchanged has reached a fixed point and
+        stays there (each rule is deterministic and runs on its own), so it is dropped
+        from the batch and its remaining record filled in: many rules die or freeze
+        early, and the results are exactly those of stepping it to the end."""
         tables = np.atleast_2d(tables)
-        s = self._start(space, tables)
-        axes = tuple(range(1, s.ndim))
-        history = (np.empty(s.shape + (self.steps - self.record_from,), bool)
-                   if record else None)
-        change = []
+        final = self._start(space, tables)
+        axes = tuple(range(1, final.ndim))
+        cells = int(np.prod(final.shape[1:]))
+        frames = (np.empty((self.steps - self.record_from,) + final.shape, bool)
+                  if record else None)
+        change = np.zeros((max(self.steps - self.burn, 0), len(tables)))
+        # Bookkeeping for dropping settled rules.  `rows[i]` is the original index of
+        # the i-th rule still running; `s` (its lattices) and `live_tables` (its rule
+        # tables) are aligned with `rows`.  While every rule is still running (`whole`),
+        # `frames` and `change` are written for all of them; afterwards, only at `rows`.
+        rows, s, live_tables = np.arange(len(tables)), final, tables
         for t in range(self.steps):
+            whole = len(rows) == len(tables)
             if record and t >= self.record_from:
-                history[..., t - self.record_from] = s
-            s2 = space.step(s, tables)
-            if t >= self.burn:
-                change.append((s2 != s).mean(axis=axes))
-            s = s2
-        change = np.mean(change, axis=0) if change else np.zeros(len(tables))
-        return Trajectory(s, change, history)
+                frames[t - self.record_from, slice(None) if whole else rows] = s
+            after = space.step(s, live_tables)
+            fixed = None
+            # from `burn` on the change rate compares every step anyway; before, only
+            # the steps _is_check_step picks look for fixed points
+            if t >= self.burn or _is_check_step(t):
+                flips = np.count_nonzero(after != s, axis=axes)
+                if t >= self.burn:
+                    change[t - self.burn, slice(None) if whole else rows] = flips / cells
+                fixed = flips == 0
+            s = after
+            if fixed is not None and fixed.any():
+                final[rows[fixed]] = s[fixed]
+                if record:
+                    frames[max(t + 1 - self.record_from, 0):, rows[fixed]] = s[fixed]
+                rows, s, live_tables = rows[~fixed], s[~fixed], live_tables[~fixed]
+                if not len(rows):
+                    break
+        final[rows] = s
+        change = change.mean(axis=0) if len(change) else np.zeros(len(tables))
+        return Trajectory(final, change, time_last(frames) if record else None)
 
     def damage(self, space, tables):
         """Damage spreading: flip the middle cell of one copy of the soup, run both
@@ -309,7 +344,10 @@ class Assay:
         ~0 ordered (damage absorbed); ~0.5 chaotic (two unrelated binary states differ
         in half their cells; with v states the baseline is (v-1)/v); in between the
         complex band.  A 1D ring only spreads damage inside its light cone, so give
-        1D rules enough steps or compare against the same light-cone limit."""
+        1D rules enough steps or compare against the same light-cone limit.
+
+        A rule is dropped from the batch, its answer known, once its two copies are
+        equal (the damage has healed for good) or both have reached a fixed point."""
         tables = np.atleast_2d(tables)
         a = self._start(space, tables)
         for _ in range(self.damage_burn):
@@ -317,10 +355,26 @@ class Assay:
         b = a.copy()
         middle = self.size(space) // 2
         b[(slice(None),) + (middle,) * space.ndim] ^= 1
-        for _ in range(self.damage_steps):
-            a = space.step(a, tables)
-            b = space.step(b, tables)
-        return (a != b).mean(axis=tuple(range(1, a.ndim)))
+        axes = tuple(range(1, a.ndim))
+        cells = int(np.prod(a.shape[1:]))
+        out = np.zeros(len(tables))
+        rows, live_tables = np.arange(len(tables)), tables
+        for t in range(self.damage_steps):
+            a2, b2 = space.step(a, live_tables), space.step(b, live_tables)
+            if not _is_check_step(t):
+                a, b = a2, b2
+                continue
+            differ = np.count_nonzero(a2 != b2, axis=axes)
+            done = differ == 0
+            done |= ~(a2 != a).any(axis=axes) & ~(b2 != b).any(axis=axes)
+            a, b = a2, b2
+            if done.any():
+                out[rows[done]] = differ[done] / cells
+                rows, live_tables, a, b = rows[~done], live_tables[~done], a[~done], b[~done]
+                if not len(rows):
+                    break
+        out[rows] = np.count_nonzero(a != b, axis=axes) / cells
+        return out
 
 
 # ---------------------------------------------------------------- lazily measured batches

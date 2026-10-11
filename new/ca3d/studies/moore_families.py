@@ -26,8 +26,8 @@ them.
 Members.  Every life-like (B/S) rule, all 262,144 of them, is measured once from the
 four starts in SOUPS (a census, see analysis/banks.py), so a family's B/S members are
 simply the rules whose recorded values fall in its bands (`members`).  The census is
-cached in data/bank_census.npz; it is not committed, takes about 12 minutes on 20
-processes, and is the same every time it is built.
+cached in data/bank_census.npz; it is not committed, takes about 8 minutes on Billy's
+20-core desktop (other hardware will differ), and is the same every time it is built.
 
 Pools.  `build_pools` samples up to BASES members of each settling family, expands each
 to 512 entries and flips a few entries (FLIPS, VARIANTS; flipping is what makes a rule
@@ -78,6 +78,7 @@ from ..analysis import banks, metrics
 from ..analysis.dynamics import Assay, Moore, Totalistic
 from ..analysis.search import Band, Criterion, Pipeline, perturbations
 from ..rulesets import life
+from ..rulesets.lattice import time_last
 
 DATA = Path(__file__).resolve().parents[2] / 'data'
 CACHE = DATA / 'rule_pools.npz'
@@ -220,9 +221,9 @@ def _sample(tables, limit, rng):
 
 
 def build_pools(jobs=None, verbose=True):
-    """Build every family's pool: {name: (N, 512) uint8 array}.  Needs the census (about
-    12 minutes on 20 processes unless cached), then a few minutes more; `load_pools`
-    caches the result."""
+    """Build every family's pool: {name: (N, 512) uint8 array}.  Needs the census (see
+    the module docstring for how long it takes, unless cached), then a few minutes more;
+    `load_pools` caches the result."""
     log = print if verbose else (lambda *a, **k: None)
     census = life_like_census(jobs=jobs, log=log)
     rng = np.random.default_rng(POOL_SEED)
@@ -320,11 +321,11 @@ def handover_run(table):
     step t) and the street mask."""
     state, material = _handover_start()
     buildings = handover_layout()
-    frames = np.empty(state.shape + (TRAIT_STEPS,), bool)
+    frames = np.empty((TRAIT_STEPS,) + state.shape, bool)
     for t in range(TRAIT_STEPS):
-        frames[..., t] = state
+        frames[t] = state
         state = np.where(buildings, life.step_moore(state, material), life.step_moore(state, table))
-    return frames, ~buildings
+    return time_last(frames), ~buildings
 
 
 def _active_share(record, mask=None):

@@ -46,6 +46,7 @@ from typing import Callable
 import numpy as np
 
 from . import life, wolfram
+from .lattice import time_last
 
 
 # ---------------------------------------------------------------- neighbourhoods
@@ -219,17 +220,19 @@ class HierarchicalCA:
     def run(self, steps, record_layers=False):
         """Run `steps` steps; frame t of the record is the state *before* step t."""
         shape = self.states[0].shape
-        fine = np.empty(shape + (steps,), bool)
-        context = np.empty(shape + (steps,), np.uint16 if self.n_layers > 9 else np.uint8)
-        layers = [np.empty(shape + (steps,), np.uint8) for _ in self.layers] if record_layers else None
+        fine = np.empty((steps,) + shape, bool)         # time first while filling (time_last)
+        context = np.empty((steps,) + shape, np.uint16 if self.n_layers > 9 else np.uint8)
+        layers = [np.empty((steps,) + shape, np.uint8) for _ in self.layers] if record_layers else None
         for t in range(steps):
-            fine[..., t] = self.states[0]
-            context[..., t] = self.packed_context()
+            fine[t] = self.states[0]
+            context[t] = self.packed_context()
             if record_layers:
                 for j in range(self.n_layers):
-                    layers[j][..., t] = self._parent_bits(j, 0)
+                    layers[j][t] = self._parent_bits(j, 0)
             self.step()
-        return Spacetime(fine, context, layers, list(self.rotation_log))
+        return Spacetime(time_last(fine), time_last(context),
+                         [time_last(a) for a in layers] if record_layers else None,
+                         list(self.rotation_log))
 
 
 # ---------------------------------------------------------------- rotation policies
