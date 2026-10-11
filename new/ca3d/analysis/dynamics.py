@@ -31,9 +31,8 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..rulesets import life, wolfram
-from ..rulesets.deposition import box_sum
+from ..rulesets.lattice import box_sum
 from ..rulesets.rules import apply_table
-from .metrics import box3_sum
 
 
 # ---------------------------------------------------------------- rule spaces
@@ -142,10 +141,8 @@ class Totalistic(RuleSpace):
         if self.ndim == 2 and self.radius == 1:          # the fast life.py path
             return life.step_totalistic(states, tables)
         batch = states.ndim - self.ndim
-        if self.radius == 1 and self.neighbours < 255:      # separable rolls, uint8
-            box = box3_sum(states, range(batch, states.ndim))
-        else:
-            box = box_sum(states, (0,) * batch + (self.radius,) * self.ndim)
+        small = np.uint8 if self.neighbours < 255 else np.int32      # uint8 is faster
+        box = box_sum(states, (0,) * batch + (self.radius,) * self.ndim, dtype=small)
         code = states.astype(np.int32) * (self.neighbours + 1) + (box - states)
         return apply_table(tables, code).astype(np.uint8)
 

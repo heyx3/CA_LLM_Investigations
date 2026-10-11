@@ -167,6 +167,9 @@ def per_soup():
             Criterion('corr_time', None, on='history')]
 
 
+# Bump after changing the code of a measure PROFILE records (spindly, settle, blink, ...)
+PROFILE_VERSION = 1
+
 PROFILE = {'dense': banks.Soup(moore_families.DENSE, per_soup(), record=True),
            'coin': banks.Soup(moore_families.COIN, per_soup(), record=True),
            'sparse': banks.Soup(moore_families.SPARSE, per_soup(), record=True),
@@ -187,7 +190,7 @@ def profile(pools, jobs, rebuild, log):
     tables = np.concatenate([pools[k] for k in names])
     family = np.concatenate([[k] * len(pools[k]) for k in names])
     census = banks.cached(OUT / 'profile.npz', moore_families.MOORE, PROFILE, tables=tables,
-                          rebuild=rebuild, jobs=jobs, log=log)
+                          rebuild=rebuild, jobs=jobs, log=log, version=PROFILE_VERSION)
     return census, family
 
 
@@ -696,8 +699,7 @@ def noise_study(args, census, family, log):
 # ---------------------------------------------------------------- does avoiding spindly static banks remove the hair?
 
 CLOSE_UP = 40                       # close-ups: the middle CLOSE_UP^2 columns, top 2 * CLOSE_UP steps
-# Plain rule draws judged by eye earlier (search_hierarchies --city-draws)
-JUDGED = {5: 'judged: similar to the original', 3: 'judged: boring pipes', 15: 'judged: most different, dull'}
+# Rule draws judged by eye earlier are cityscape.JUDGED_DRAWS, kept as tables.
 
 
 def render_noise_panels(job):
@@ -764,10 +766,18 @@ def hair_test(args, census, family, log):
             return static[rng.choice(near)]
         return choose
 
+    def key(tables):
+        return b''.join(np.ascontiguousarray(t).tobytes() for t in tables)
+
+    judged = list(city.JUDGED_DRAWS)
+    judged_tables = {name: city.judged_banks(name) for name in judged}
+    judged_seed = {name: city.JUDGED_DRAWS[name]['ic_seed'] for name in judged}
+    seen = {key(t) for t in judged_tables.values()}
+    scanned = {s: draw(s) for s in range(1, args.scan + 1)}
     with ProcessPoolExecutor(args.jobs) as pool:
-        scan = list(pool.map(run_city, [(draw(s), s) for s in range(1, args.scan + 1)], chunksize=2))
+        scan = list(pool.map(run_city, [(t, s) for s, t in scanned.items()], chunksize=2))
     hair_of = np.array([r['hair'] for r in scan])
-    hairiest = [int(i) + 1 for i in np.argsort(-hair_of) if int(i) + 1 not in JUDGED][:args.per_row]
+    hairiest = [int(i) + 1 for i in np.argsort(-hair_of) if key(scanned[int(i) + 1]) not in seen][:args.per_row]
     log(f'hair over random rule draws 1-{args.scan}: p10 {np.percentile(hair_of, 10):.3f}, median '
         f'{np.median(hair_of):.3f}, p90 {np.percentile(hair_of, 90):.3f}, max {hair_of.max():.3f}; '
         f'hairiest {hairiest}')
@@ -782,11 +792,11 @@ def hair_test(args, census, family, log):
                                f'({len(members)} of the {len(static)} static tables)',
                        [(swap(reference, from_set(members, np.random.default_rng(1000 + i))), 3, f'version {i + 1}')
                         for i in range(k)]))
-    judged = list(JUDGED)
-    layout.append(('E', 'rule draws you judged earlier, as drawn', [(draw(s), s, f'draw {s}') for s in judged]))
+    layout.append(('E', 'rule draws you judged earlier, as drawn',
+                   [(judged_tables[n], judged_seed[n], n) for n in judged]))
     layout.append(('F', 'the same draws, static banks swapped for unfragmented ones of about the same density',
-                   [(swap(draw(s), same_density_unfragmented(np.random.default_rng(2000 + s))), s, f'draw {s}, fixed')
-                    for s in judged]))
+                   [(swap(judged_tables[n], same_density_unfragmented(np.random.default_rng(2000 + judged_seed[n]))),
+                     judged_seed[n], f'{n}, fixed') for n in judged]))
     layout.append(('G', f'the hairiest of {args.scan} rule draws, as drawn', [(draw(s), s, f'draw {s}') for s in hairiest]))
     layout.append(('H', 'the same draws, static banks swapped for unfragmented ones of about the same density',
                    [(swap(draw(s), same_density_unfragmented(np.random.default_rng(2000 + s))), s, f'draw {s}, fixed')
@@ -815,8 +825,7 @@ def hair_test(args, census, family, log):
 
     def caption(key, name):
         r = measured[key]
-        note = (JUDGED.get(int(name.split()[1]), '') if name.startswith('draw') and 'fixed' not in name
-                else '')
+        note = f'judged: {city.JUDGED_DRAWS[name]["judged"]}' if name in city.JUDGED_DRAWS else ''
         return f'{name}: hair {r["hair"]:.3f}', note or city_line(r)
 
     sheets.labelled_sheet([(f'{letter}. {label}', [(path[(letter, i)], *caption((letter, i), name))

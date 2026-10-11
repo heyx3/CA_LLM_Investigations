@@ -33,7 +33,6 @@ With jobs > 1 the batches are spread over processes, so the criteria must be pic
 needs the usual `if __name__ == '__main__':` guard.
 """
 import os
-import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
@@ -58,11 +57,15 @@ class Soup:
         object.__setattr__(self, 'criteria', tuple(self.criteria))
 
 
-def describe(space, soups):
+def describe(space, soups, version=0):
     """What a census measures, as text: saved with it, so that a cached census is only
-    reused for the same space, starts and criteria.  (A change inside a measure's code
-    does not show here; rebuild after one.)"""
-    lines = [repr(space)]
+    reused for the same space, starts, criteria and version.
+
+    A measure is named by its metrics name, or, for a function, by its criterion's
+    label (or the function's name), not by where its code lives: moving the code keeps
+    the cache.  A change inside a measure's code does not show here either: whoever
+    owns the census bumps `version` after one."""
+    lines = [f'version {version}', repr(space)]
     for key, soup in soups.items():
         lines.append(f'{key}: {soup.assay!r} record={soup.record}')
         lines += [f'  {c.name} = {_measure_id(c)}' for c in soup.criteria]
@@ -70,13 +73,7 @@ def describe(space, soups):
 
 
 def _measure_id(c):
-    if isinstance(c.measure, str):
-        m = c.measure
-    else:
-        module = c.measure.__module__
-        if module == '__main__':        # a script run directly: named as when imported
-            module = Path(sys.modules['__main__'].__file__).stem
-        m = f'{module}.{c.measure.__qualname__}'
+    m = c.measure if isinstance(c.measure, str) else f'function {c.name}'
     return f'{m} on={c.on} params={sorted(c.params.items())}'
 
 
@@ -90,6 +87,7 @@ class Census:
     soups: dict
     complete: bool = False          # tables is space.enumerate(): saved without them
     seconds: float = field(default=0.0, compare=False)
+    version: object = 0             # see describe
 
     def __len__(self):
         return len(self.tables)
@@ -121,23 +119,23 @@ class Census:
         arrays = {f'v_{k}': v for k, v in self.values.items()}
         if not self.complete:
             arrays['tables'] = self.tables
-        np.savez_compressed(path, _describe=np.array(describe(self.space, self.soups)),
+        np.savez_compressed(path, _describe=np.array(describe(self.space, self.soups, self.version)),
                             _complete=np.array(self.complete), **arrays)
 
     @classmethod
-    def load(cls, path, space, soups):
-        """A saved census of `space` under `soups`, or None if the file is missing or
-        measured something else."""
+    def load(cls, path, space, soups, version=0):
+        """A saved census of `space` under `soups` at `version`, or None if the file is
+        missing or measured something else."""
         path = Path(path)
         if not path.exists():
             return None
         with np.load(path) as data:
-            if '_describe' not in data.files or data['_describe'].item() != describe(space, soups):
+            if '_describe' not in data.files or data['_describe'].item() != describe(space, soups, version):
                 return None
             complete = bool(data['_complete'])
             tables = space.enumerate() if complete else data['tables']
             values = {k[2:]: data[k] for k in data.files if k.startswith('v_')}
-        return cls(space, tables, values, dict(soups), complete)
+        return cls(space, tables, values, dict(soups), complete, version=version)
 
 
 def default_jobs():
@@ -206,13 +204,13 @@ def _progress(total, t0, log, every=0.1):
     return report
 
 
-def cached(path, space, soups, tables=None, rebuild=False, jobs=None, log=print):
+def cached(path, space, soups, tables=None, rebuild=False, jobs=None, log=print, version=0):
     """census() of `tables` (default: every rule of the space, space.enumerate()) kept in
-    the file `path`: loaded when it holds the same space, soups and tables, computed and
-    saved otherwise."""
+    the file `path`: loaded when it holds the same space, soups, tables and `version`
+    (see describe), computed and saved otherwise."""
     path = Path(path)
     if not rebuild:
-        found = Census.load(path, space, soups)
+        found = Census.load(path, space, soups, version)
         if found is not None and (tables is None) == found.complete and (
                 tables is None or np.array_equal(found.tables, tables)):
             return found
@@ -222,6 +220,7 @@ def cached(path, space, soups, tables=None, rebuild=False, jobs=None, log=print)
         log(f'census of {len(tables)} rules (cached in {path})')
     result = census(space, tables, soups, jobs, log=log)
     result.complete = complete
+    result.version = version
     path.parent.mkdir(parents=True, exist_ok=True)
     result.save(path)
     if log:

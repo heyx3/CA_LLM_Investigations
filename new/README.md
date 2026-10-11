@@ -47,6 +47,7 @@ knowledge of any analysis.
 | `life.py` | 2D B/S and 512-entry Moore rules, expansion, rule rotation |
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
+| `lattice.py` | operations on lattices of any dimension: box sums |
 | `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain |
 | `triplanar.py` | three 1D sheets combined on orthogonal planes |
 | `octaves.py` | octave blending of any volume builder |

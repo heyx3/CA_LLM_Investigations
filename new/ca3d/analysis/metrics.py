@@ -51,6 +51,8 @@ from typing import Callable
 import numpy as np
 from scipy import ndimage
 
+from ..rulesets.lattice import box_sum
+
 
 # ---------------------------------------------------------------- array conventions
 
@@ -149,12 +151,9 @@ def gzip_ratio(X, relative=False, seed=0):
 # ---------------------------------------------------------------- spatial structure
 
 def box3_sum(X, axes):
-    """Sum over the 3^d box around every cell (self included), periodic.  `axes` are the
-    axes that form the box (the 2 or 3 lattice axes of a sample)."""
-    total = np.asarray(X, np.uint8)
-    for a in axes:
-        total = total + np.roll(total, 1, a) + np.roll(total, -1, a)
-    return total
+    """Sum over the 3^d box around every cell (self included), periodic, in uint8.
+    `axes` are the axes that form the box (the 2 or 3 lattice axes of a sample)."""
+    return box_sum(X, [1 if a in axes else 0 for a in range(np.ndim(X))], dtype=np.uint8)
 
 
 def compactness(X, dims=None):

@@ -83,6 +83,7 @@ DATA = Path(__file__).resolve().parents[2] / 'data'
 CACHE = DATA / 'rule_pools.npz'
 CENSUS = DATA / 'bank_census.npz'
 CACHE_VERSION = 5
+CENSUS_VERSION = 1      # bump after changing the code of a measure the census SOUPS record
 
 LIFE_LIKE = Totalistic()        # 18-entry B/S tables
 MOORE = Moore()                 # 512-entry tables
@@ -166,7 +167,7 @@ def select(family, tables):
 def life_like_census(rebuild=False, jobs=None, log=print):
     """Every life-like (B/S) rule measured from every start in SOUPS (a banks.Census,
     rows in rule-code order), cached in data/bank_census.npz."""
-    return banks.cached(CENSUS, LIFE_LIKE, SOUPS, rebuild=rebuild, jobs=jobs, log=log)
+    return banks.cached(CENSUS, LIFE_LIKE, SOUPS, rebuild=rebuild, jobs=jobs, log=log, version=CENSUS_VERSION)
 
 
 def members(family, census=None):

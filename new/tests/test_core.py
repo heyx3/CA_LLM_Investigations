@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from ca3d.render3D import render
-from ca3d.rulesets import deposition, hierarchy, lattice_gas, life, rules, wolfram
+from ca3d.rulesets import hierarchy, lattice, lattice_gas, life, rules, wolfram
 
 
 # ---------------------------------------------------------------- 1D rules
@@ -182,7 +182,13 @@ def test_box_sum_matches_brute_force():
     radii = (1, 2, 0)
     brute = sum(np.roll(V, (a, b, c), axis=(0, 1, 2))
                 for a in range(-1, 2) for b in range(-2, 3) for c in range(1))
-    assert np.array_equal(deposition.box_sum(V, radii), brute)
+    assert np.array_equal(lattice.box_sum(V, radii), brute)
+    # uint8 sums wrap, but box sums under 256 still come out exact
+    assert np.array_equal(lattice.box_sum(V, radii, dtype=np.uint8), brute)
+    # without wrapping, cells beyond the edge count as empty
+    padded = np.pad(V, 2)
+    inside = sum(np.roll(padded, (a, b), axis=(0, 1)) for a in range(-1, 2) for b in range(-2, 3))
+    assert np.array_equal(lattice.box_sum(V, radii, wrap=False), inside[2:-2, 2:-2, 2:-2])
 
 
 def test_lattice_gas_stream_and_bounce_conserve_particles():

@@ -333,6 +333,27 @@ def test_census_cache_and_enumeration(tmp_path):
     assert again.complete and np.array_equal(first.values['coin.density'], again.values['coin.density'])
     other = {'coin': banks.Soup(dynamics.Assay(n=48, init='coin'), soups['coin'].criteria)}
     assert banks.Census.load(path, t, other) is None
+    assert banks.Census.load(path, t, soups, version=1) is None       # a measure's code changed
+
+
+def density_a(trial):
+    return trial.trajectory.final.mean(axis=(-2, -1))
+
+
+def density_b(trial):
+    return trial.trajectory.final.mean(axis=(-2, -1))
+
+
+def test_census_key_names_measures_not_their_code():
+    # a function measure is known by its label: moving or renaming its code keeps the
+    # cache, and only a version bump (or another label) invalidates it
+    space = dynamics.Totalistic(ndim=1)
+    a = {'coin': banks.Soup(dynamics.Assay(n=32, init='coin'), [search.Criterion(density_a, None, label='d')])}
+    b = {'coin': banks.Soup(dynamics.Assay(n=32, init='coin'), [search.Criterion(density_b, None, label='d')])}
+    assert banks.describe(space, a) == banks.describe(space, b)
+    assert banks.describe(space, a, version=2) != banks.describe(space, a)
+    c = {'coin': banks.Soup(dynamics.Assay(n=32, init='coin'), [search.Criterion(density_a, None, label='e')])}
+    assert banks.describe(space, c) != banks.describe(space, a)
 
 
 def test_tables_and_targets():

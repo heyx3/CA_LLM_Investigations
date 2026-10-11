@@ -1,7 +1,7 @@
 """Large-radius 3D CAs built on box counts: frozen deposition and macro/micro chambers.
 
-`box_sum` efficiently counts live cells in an axis-aligned box around every voxel,
-whatever the radius (separable running sums), with independent radii per axis.
+`box_sum` (from lattice.py) counts live cells in an axis-aligned box around every
+voxel, whatever the radius, with independent radii per axis.
 
 Frozen deposition is a multi-state ("Generations"-style) CA with large neighbourhoods:
   0 empty, 1 alive (a travelling wavefront), 2..n_states-1 refractory (a cooldown
@@ -19,26 +19,9 @@ comparison.
 """
 import numpy as np
 
+from .lattice import box_sum
+
 FROZEN = 255
-
-
-def box_sum(V, radii, wrap=True):
-    """Sum of V over the box [-r, r] on each axis around every cell (self included)."""
-    out = np.asarray(V, np.int32)
-    radii = (radii,) * out.ndim if np.isscalar(radii) else tuple(radii)
-    for axis, r in enumerate(radii):
-        if r == 0:
-            continue
-        n = out.shape[axis]
-        pad = [(0, 0)] * out.ndim
-        pad[axis] = (r + 1, r)
-        c = np.cumsum(np.pad(out, pad, mode='wrap' if wrap else 'constant'), axis=axis)
-        hi = [slice(None)] * out.ndim
-        lo = [slice(None)] * out.ndim
-        hi[axis] = slice(2 * r + 1, 2 * r + 1 + n)
-        lo[axis] = slice(0, n)
-        out = c[tuple(hi)] - c[tuple(lo)]
-    return out
 
 
 def _neighbour_counts(field, radii, bleed_p, bleed_axis, rng):

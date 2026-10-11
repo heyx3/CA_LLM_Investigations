@@ -66,6 +66,44 @@ SCALES = (1, 2, 4, 8)
 # The cityscape's design: PLAN for the fine layer, the slow family for the coarse ones.
 DESIGN = hierarchy_designs.Design(SCALES, tuple(PLAN), ('slow',) * (len(SCALES) - 1), convention='cityscape')
 
+# Rule draws of DESIGN that were judged by eye from their renders
+# (scripts/search_hierarchies.py --city-draws, pools c8f8aaaf17a8).  Kept as tables,
+# written as REFERENCE_BANKS is: the names say which draw each was then, but the same
+# seed draws different tables once the pools change.  Each starts from ic_seed, as it
+# was judged.  `judged_banks(name)` gives the tables.
+JUDGED_DRAWS = {
+    'draw 5': {'judged': 'similar to the original', 'ic_seed': 5, 'banks': [
+        [['dead', 'B348/S12 ^97,191,399,430'], ['dead', 'B4/S ^124,247,385,454'],
+         ['static', 'B18/S12346 ^40,101,439,475'], ['static', 'B8/S01237 ^26,294,365,420'],
+         ['static', 'B04/S012345678 ^176,262,361,378'], ['static', 'B8/S12357 ^79,303,404,507'],
+         ['complex', 'B04578/S0148 ^45,182,397,480'], ['complex', 'B35/S1368 ^55,57,143,430']],
+        [['slow', 'B0167/S2345678 ^98,205,214,393'], ['slow', 'B5/S13457'], ['slow', 'B478/S45678'],
+         ['slow', 'B4/S0234 ^230,333,395,477']],
+        [['slow', 'B4567/S014678 ^81,176,436,477'], ['slow', 'B568/S3456 ^113,154,414,466']],
+        [['slow', 'B4567/S014678']],
+    ]},
+    'draw 3': {'judged': 'boring pipes', 'ic_seed': 3, 'banks': [
+        [['dead', 'B478/S35 ^48,179,294,411'], ['dead', 'B78/S68 ^7,202,313,318'],
+         ['static', 'B13/S1234578 ^69,141,319,375'], ['static', 'B78/S1236 ^282,302,327,351'],
+         ['static', 'B4/S013456 ^15,260,323,368'], ['static', 'B68/S01258 ^2,75,352,495'],
+         ['complex', 'B0457/S0147 ^121,221,317,360'], ['complex', 'B0458/S01478 ^315,321,342,440']],
+        [['slow', 'B567/S13456'], ['slow', 'B58/S024567'], ['slow', 'B378/S1245678'],
+         ['slow', 'B567/S03456 ^85,190,439,509']],
+        [['slow', 'B458/S125678 ^101,218,360,482'], ['slow', 'B56/S4567 ^114,158,321,498']],
+        [['slow', 'B05678/S01235678']],
+    ]},
+    'draw 15': {'judged': 'most different, dull', 'ic_seed': 15, 'banks': [
+        [['dead', 'B7/S27 ^151,251,257,261'], ['dead', 'B35678/S68 ^130,144,276,377'],
+         ['static', 'B78/S01258 ^15,114,190,210'], ['static', 'B/S23467 ^74,285,355,381'],
+         ['static', 'B02/S012345678 ^141,454,473,503'], ['static', 'B07/S012457 ^261,311,335,445'],
+         ['complex', 'B05678/S02468 ^58,200,231,485'], ['complex', 'B06/S035 ^100,253,322,467']],
+        [['slow', 'B678/S03456 ^77,382,491,505'], ['slow', 'B4567/S014678 ^81,176,436,477'],
+         ['slow', 'B12378/S1345678 ^146,163,278,291'], ['slow', 'B58/S234678']],
+        [['slow', 'B0167/S2345678 ^98,205,214,393'], ['slow', 'B478/S235678 ^31,178,303,431']],
+        [['slow', 'B5/S23467 ^112,127,137,377']],
+    ]},
+}
+
 # What the reference cityscape measures (160^3): a target profile for searches.
 # Keys are metrics.MEASURES names: density (live fraction), pillars (share of live
 # cells in long unchanging vertical runs), void (largest empty region as a share of
@@ -87,6 +125,11 @@ def reference_banks():
 def reference():
     """The reference cityscape as a hierarchy_designs.Instance of DESIGN (started from seed 3)."""
     return hierarchy_designs.Instance(DESIGN, reference_banks(), 3)
+
+
+def judged_banks(name):
+    """A judged draw's tables (JUDGED_DRAWS[name]): one (contexts, 512) array per layer."""
+    return hierarchy.parse_banks(JUDGED_DRAWS[name]['banks'])
 
 
 def plan_design(plan=PLAN, scales=SCALES):

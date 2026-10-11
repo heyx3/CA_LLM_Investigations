@@ -12,6 +12,7 @@ does when run (its family, say) belongs in ca3d.studies.
   life              2D B/S and 512-entry Moore rules, expansion, rule rotation
   hierarchy         the hierarchical (multi-octave) CA engine and rotation policies
   initial           initial conditions: blobs, uniform, sparse points, rings, ...
+  lattice           operations on lattices of any dimension: box sums
   double_spacetime  1D CA extruded to 3D with per-slab rules; lambda terrain
   triplanar         three 1D sheets combined on orthogonal planes
   octaves           octave blending of any volume builder

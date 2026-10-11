@@ -116,6 +116,15 @@ def test_cityscape_is_an_instance_of_its_design():
         cityscape.plan_design(['dead', ('dead', {'activity': (0, 0.5)})] + ['static'] * 6)
 
 
+def test_judged_draws_are_kept_as_tables():
+    reference = cityscape.reference_banks()
+    for name, entry in cityscape.JUDGED_DRAWS.items():
+        tables = cityscape.judged_banks(name)
+        assert [t.shape for t in tables] == [t.shape for t in reference], name
+        assert [[f for f, _ in layer] for layer in entry['banks']] == cityscape.DESIGN.slot_families(), name
+        assert cityscape.make(tables, 32, ic_seed=entry['ic_seed']).run(8).fine.any(), name
+
+
 def test_design_conventions_and_text_forms():
     pools = moore_families.load_pools()
     d = hierarchy_designs.Design((1, 2, 4), ('dead', 'static', 'grow', 'complex'), ('glide', 'slow'), slowdown=2,
