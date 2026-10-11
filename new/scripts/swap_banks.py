@@ -48,7 +48,6 @@ swaps.csv (means over initial conditions), slots.csv, renders/*.png, and one con
 per kind with thumbnails ordered from least to most shifted.
 """
 import argparse
-import colorsys
 import functools
 import itertools
 import json
@@ -58,7 +57,7 @@ import sys
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -69,9 +68,9 @@ sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                            # noqa: E402
 from ca3d.render3D import sheets                                     # noqa: E402
-from ca3d.render3D.render import Camera, Lighting, render, save_png   # noqa: E402
+from ca3d.render3D.render import PostFX, save_png                     # noqa: E402
 from ca3d.rulesets import hierarchy                                   # noqa: E402
-from ca3d.studies import cityscape as city, moore_families            # noqa: E402
+from ca3d.studies import cityscape as city, moore_families, scenes    # noqa: E402
 from ca3d.studies.hierarchy_designs import slot_name                  # noqa: E402
 
 MEASURES = ('density', 'pillars', 'void', 'streaks', 'coherence', 'parts', 'largest_part',
@@ -86,10 +85,8 @@ PLURAL = {'swap': 'swaps', 'copy': 'copies'}
 KINDS = ('within layer, within family', 'within layer, between families',
          'between layers, within family', 'between layers, between families')
 
-# Render colours, keyed by (layer 3, layer 2) bits: azure, green, crimson, amber
-HUES = {(0, 0): 0.58, (0, 1): 0.36, (1, 0): 0.97, (1, 1): 0.12}
-SATURATION = {0: 0.25, 1: 1.0}          # by layer 1's bit
-N_COARSE = 3                            # layers 1-3 (scales 2, 4, 8)
+# Render colours: studies/scenes.py's 'layers' colouring (scenes.LAYER_HUES, keyed by
+# the (layer 3, layer 2) bits: azure, green, crimson, amber; saturation by layer 1)
 
 
 
@@ -224,28 +221,20 @@ def pool_index(bank, pool):
 
 # ---------------------------------------------------------------- colour and sheets
 
-def palette():
-    """RGB for every packed coarse context (layer 1 the most significant bit)."""
-    def bit(ctx, layer):
-        return (ctx >> (N_COARSE - layer)) & 1
-    return np.array([colorsys.hsv_to_rgb(HUES[bit(c, 3), bit(c, 2)], SATURATION[bit(c, 1)], 1.0)
-                     for c in range(2 ** N_COARSE)])
-
-
 def render_by_layers(st, res):
-    """The palette is given in display terms; the renderer shades in linear light and
-    gamma-encodes, so undo the gamma first and a fully lit face shows the HSV colour."""
-    linear = palette() ** Lighting().gamma
-    return render(st.fine, st.context, linear, camera=Camera(res, res))
+    """The run coloured by its coarse layers (scenes.hierarchy_scene, 'layers')."""
+    scene = scenes.hierarchy_scene(st, 4, 'layers')
+    return scene.render(camera=replace(scene.camera, width=res, height=res))
 
 
 def legend():
     """Swatches of the eight coarse contexts: columns by (layer 3, layer 2), rows by layer 1."""
-    pal, small = palette(), sheets.font(13)
+    # swatches in display values: the palette's linear colours as a fully lit face shows them
+    pal, small = PostFX().display(scenes.layers_palette()), sheets.font(13)
     sw_w, sw_h, col_w, left = 104, 26, 124, 48
     img = Image.new('RGB', (left + 4 * col_w, 20 + 2 * (sw_h + 4)), sheets.BACKGROUND)
     draw = ImageDraw.Draw(img)
-    for h, (l3, l2) in enumerate(HUES):
+    for h, (l3, l2) in enumerate(scenes.LAYER_HUES):
         x = left + h * col_w
         draw.text((x, 0), f'L3={l3}  L2={l2}', fill=sheets.DIM, font=small)
         for l1 in (0, 1):

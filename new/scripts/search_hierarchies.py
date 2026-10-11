@@ -101,7 +101,7 @@ sys.path.insert(0, str(ROOT))
 
 from ca3d.analysis import metrics, search                              # noqa: E402
 from ca3d.analysis.search import Band                                  # noqa: E402
-from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
+from ca3d.render3D.render import Scene, cut_if_dense                  # noqa: E402
 from ca3d.render3D.sheets import contact_sheet                         # noqa: E402
 from ca3d.rulesets import hierarchy                                    # noqa: E402
 from ca3d.studies import cityscape as city, moore_families, saved      # noqa: E402
@@ -423,12 +423,10 @@ def gene_table(designs, ids, confirmed):
 def render_design(design, seed, path, res, pools):
     """Height-coloured render (as the cityscape is shown).  Design None is the reference
     cityscape, started from `seed`.  Volumes over 0.3 dense have the corner facing the
-    camera cut away, as render3D.scenes does."""
+    camera cut away, as the scenes do."""
     ca = city.make(n=N, ic_seed=seed) if design is None else build(design, seed, pools)
     V = ca.run(N).fine
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
 
 
 def atypicality(entry, seed):
@@ -569,9 +567,7 @@ def run_instance_job(job):
 def render_instance_job(job):
     inst, path, res = job
     V = inst.build().run(N).fine
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
     return path
 
 
@@ -780,9 +776,7 @@ def render_city_draw_job(job):
     from the current pools, rendered as render_design does."""
     seed, path, res, design = job
     V = build(design, seed).run(N).fine
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
     return path
 
 

@@ -1,43 +1,34 @@
 """Named, ready-to-render recipes for every construction in the package.
 
-Each recipe takes (seed, size) and returns a Scene: an occupancy volume plus how to
-colour it.  `size` is the main lattice/volume edge length; None means the recipe's
-default.  Parameters are the configurations that gave the best results.
+Each recipe takes (seed, size) and returns a render3D Scene: an occupancy volume plus
+how to colour and view it.  `size` is the main lattice/volume edge length; None means
+the recipe's default.  Parameters are the configurations that gave the best results.
 
-    from ca3d.render3D import scenes
+    from ca3d.studies import scenes
     scene = scenes.SCENES['cityscape'](seed=3)
     image = scene.render()
+
+Randomised recipes (hierarchy_random, hierarchy_moore, cityscape_twin) record the rule
+tables they drew in scene.info['banks'] and take them back with banks=..., together
+with info['states_rng'] (states_rng=...) where the start states come from the same
+generator, so a render can be repeated whatever the pools hold by then.
+
+`hierarchy_scene` colours any hierarchy's run (by height, context, smoothed coarse
+layers, or the coarse layers' bits).
 """
-from dataclasses import dataclass, field, replace
+import colorsys
+from dataclasses import replace
 
 import numpy as np
 
-from . import color
 from ..analysis import metrics
+from ..render3D import color
+from ..render3D.render import ColorMode, Scene, cut_if_dense, cut_octant
 from ..rulesets import (deposition, double_spacetime as dst, hierarchy, lattice_gas, life, lwd, octaves,
                         triplanar as tri, wolfram)
-from ..studies import cityscape as city, moore_families, saved
-from .render import Camera, cut_octant, render
+from . import cityscape as city, moore_families, saved
 
 SCENES = {}
-
-
-@dataclass
-class Scene:
-    """What a recipe returns: a volume plus how to colour and view it.
-
-    `attr` colours the voxels: a float field in [0, 1] mapped through a colour ramp, or,
-    when `palette` is given, an integer index volume into that (K, 3) palette.
-    `info` holds extra facts about the run (steps taken, uncut density...).
-    """
-    volume: np.ndarray                  # bool [x, y, z], z up
-    attr: np.ndarray | None = None      # float [0, 1] field, or palette index volume
-    palette: np.ndarray | None = None
-    camera: Camera = field(default_factory=Camera)
-    info: dict = field(default_factory=dict)
-
-    def render(self, **kw):
-        return render(self.volume, self.attr, self.palette, camera=kw.pop('camera', self.camera), **kw)
 
 
 def scene(fn):
@@ -148,7 +139,7 @@ def lwd_hybrid(seed=0, size=None):
     seeds = [(int(r), int(c), 15 * k) for k, (r, c) in
              enumerate(rng.integers(n // 5, 4 * n // 5, size=(5, 2)))]
     vol, age = lwd.hybrid_spacetime(n, lwd.alternating_schedule(n, 40, 30, 1), seeds)
-    return Scene(vol, attr=age)
+    return Scene(vol, ColorMode.field(age))
 
 
 # ---------------------------------------------------------------- 3D CAs
@@ -179,37 +170,87 @@ def hangar(seed=3, size=None):
 
 # ---------------------------------------------------------------- hierarchical CA
 
-def _hierarchy_scene(ca, steps, colour='context', smooth_size=5, cut=False):
-    """colour: 'height' (the renderer's ramp), 'context' (one colour per packed context
-    of the coarse layers) or 'hsv' (hue/value/saturation from smoothed coarse layers)."""
-    st = ca.run(steps, record_layers=colour == 'hsv')
-    info = {'rotations': st.rotations, 'uncut_density': float(st.fine.mean())}
-    if cut:                    # dense volumes: remove the corner facing the camera
-        st.fine = cut_octant(st.fine)
+# The 'layers' colouring of a four-layer hierarchy: hue from layers 3 and 2 (cool where
+# layer 3 is off, warm where on), saturation from layer 1.  Linear RGB, as every colour
+# given to the renderer.
+LAYER_HUES = {(0, 0): 0.58, (0, 1): 0.36, (1, 0): 0.97, (1, 1): 0.12}     # by (layer 3, layer 2)
+LAYER_SATURATION = {0: 0.25, 1: 1.0}                                        # by layer 1
+
+
+def layers_palette():
+    """(8, 3) colour of every packed coarse context of a four-layer hierarchy (layer 1
+    the most significant bit): see LAYER_HUES and LAYER_SATURATION."""
+    def bit(ctx, layer):
+        return (ctx >> (3 - layer)) & 1
+    return np.array([colorsys.hsv_to_rgb(LAYER_HUES[bit(c, 3), bit(c, 2)], LAYER_SATURATION[bit(c, 1)], 1.0)
+                     for c in range(8)])
+
+
+def hierarchy_scene(record, n_layers, colour='context', smooth_size=5, cut=False):
+    """A Scene of a hierarchy's run (a hierarchy.Spacetime of an n_layers hierarchy).
+
+    colour  'height'   the renderer's height ramp
+            'context'  one colour per packed context of the coarse layers
+            'hsv'      hue / value / saturation from the smoothed coarse layers (needs
+                       the run recorded with record_layers=True)
+            'layers'   hue from layers 3 and 2, saturation from layer 1 (layers_palette;
+                       four-layer hierarchies)
+    cut     remove the corner facing the camera, for dense volumes"""
+    fine = cut_octant(record.fine) if cut else record.fine
+    info = {'rotations': record.rotations, 'uncut_density': float(record.fine.mean())}
     if colour == 'height':
-        return Scene(st.fine, info=info)
+        return Scene(fine, info=info)
     if colour == 'hsv':        # hue <- coarsest, value <- next, saturation <- layer 1
-        fields = [color.smooth(layer, smooth_size) for layer in st.layers]
+        fields = [color.smooth(layer, smooth_size) for layer in record.layers]
         index, palette = color.hsv_palette(fields[-1], fields[-2], fields[1])
-        return Scene(st.fine, index, palette, info=info)
-    n_ctx = 2 ** (ca.n_layers - 1)
+        return Scene(fine, ColorMode.indexed(index, palette), info=info)
+    if colour == 'layers':
+        if n_layers != 4:
+            raise ValueError("the 'layers' colouring is for four-layer hierarchies")
+        return Scene(fine, ColorMode.indexed(record.context, layers_palette()), info=info)
+    n_ctx = 2 ** (n_layers - 1)
     palette = color.ramp(np.linspace(0, 1, n_ctx), [(0, (0.30, 0.42, 0.72)),
                                                     (0.5, (0.55, 0.75, 0.55)),
                                                     (1, (0.95, 0.62, 0.26))])
-    return Scene(st.fine, st.context, palette, info=info)
+    return Scene(fine, ColorMode.indexed(record.context, palette), info=info)
+
+
+def _run_scene(ca, steps, colour='context', cut=False, info=None):
+    scene = hierarchy_scene(ca.run(steps, record_layers=colour == 'hsv'), ca.n_layers, colour, cut=cut)
+    scene.info.update(info or {})
+    return scene
+
+
+def _tables(info, banks, draw, rng=None, states_rng=None):
+    """The rule tables a randomised scene runs: drawn, or `banks` when given; recorded
+    in info['banks'].  `rng` is the generator the scene draws its start states from
+    after the tables: its state after the draw is recorded (info['states_rng']), and
+    with given banks it is set from `states_rng` instead, so the states match too."""
+    if banks is None:
+        banks = draw()
+    elif rng is not None:
+        if states_rng is None:
+            raise ValueError('given banks need the states_rng recorded with them')
+        rng.bit_generator.state = states_rng
+    info['banks'] = [np.asarray(b, np.uint8) for b in banks]
+    if rng is not None:
+        info['states_rng'] = rng.bit_generator.state
+    return info['banks']
 
 
 @scene
-def hierarchy_random(seed=1, size=None):
+def hierarchy_random(seed=1, size=None, banks=None, states_rng=None):
     """4-layer outer-totalistic hierarchy with uniformly random rule tables (18-entry tables):
     the baseline that shows why rule choice matters."""
     n = size or 128
     rng = np.random.default_rng(seed)
     scales = hierarchy.pow2_scales(4)
-    banks = [hierarchy.random_banks(hierarchy.n_contexts(i, 4), 18, rng) for i in range(4)]
+    info = {}
+    banks = _tables(info, banks, lambda: [hierarchy.random_banks(hierarchy.n_contexts(i, 4), 18, rng)
+                                          for i in range(4)], rng, states_rng)
     layers = hierarchy.make_layers(banks, scales, stagger=False)
     ca = hierarchy.HierarchicalCA(layers, hierarchy.random_states(n, scales, 2, rng), 'totalistic')
-    return _hierarchy_scene(ca, n, cut=True)
+    return _run_scene(ca, n, cut=True, info=info)
 
 
 @scene
@@ -227,22 +268,26 @@ def hierarchy_sg0(seed=0, size=None):
     scales = hierarchy.pow2_scales(4)
     ca = hierarchy.HierarchicalCA(hierarchy.make_layers(banks, scales),
                                   hierarchy.random_states(n, scales, 2, rng), 'totalistic')
-    return _hierarchy_scene(ca, n, cut=True)
+    return _run_scene(ca, n, cut=True)
 
 
 @scene
-def hierarchy_moore(seed=0, size=None):
+def hierarchy_moore(seed=0, size=None, banks=None, states_rng=None):
     """Non-totalistic (512-bit) hierarchy: slow coarse layers, edge-of-chaos fine layer,
-    uniform random start.  Rules drawn at random from the edge and slow moore_families."""
+    uniform random start.  Rules drawn at random from the edge and slow Moore families."""
     n = size or 160
-    pools = moore_families.load_pools()
     rng = np.random.default_rng(seed)
     scales = hierarchy.pow2_scales(4)
-    banks = [hierarchy.banks_from_pool(pools['edge' if i == 0 else 'slow'],
-                                       hierarchy.n_contexts(i, 4), rng) for i in range(4)]
+
+    def draw():
+        pools = moore_families.load_pools()
+        return [hierarchy.banks_from_pool(pools['edge' if i == 0 else 'slow'], hierarchy.n_contexts(i, 4), rng)
+                for i in range(4)]
+    info = {}
+    banks = _tables(info, banks, draw, rng, states_rng)
     ca = hierarchy.HierarchicalCA(hierarchy.make_layers(banks, scales),
                                   hierarchy.random_states(n, scales, 2, rng))
-    return _hierarchy_scene(ca, n, cut=True)
+    return _run_scene(ca, n, cut=True, info=info)
 
 
 @scene
@@ -251,7 +296,7 @@ def cityscape(seed=3, size=None):
     complex contexts on the fine layer).  `seed` picks the starting state; 3 is the
     reference render."""
     n = size or 160
-    return _hierarchy_scene(city.make(n=n, ic_seed=seed), n, colour='height')
+    return _run_scene(city.make(n=n, ic_seed=seed), n, colour='height')
 
 
 @scene
@@ -260,7 +305,7 @@ def cityscape_rotating(seed=3, size=None):
     change direction as the structure builds upward (periods 8 / 20 / 40 were tried)."""
     n = size or 160
     ca = city.make(n=n, ic_seed=seed, rotation=hierarchy.RotateEvery(20))
-    return _hierarchy_scene(ca, n, colour='height')
+    return _run_scene(ca, n, colour='height')
 
 
 @scene
@@ -270,7 +315,7 @@ def cityscape_ladder(seed=3, size=None):
     `seed` varies only the initial condition; the rules are the reference cityscape's."""
     n = size or 160
     ca = city.make(n=n, ic_seed=seed, rotation=hierarchy.RotateOnDensityLadder(0.05))
-    return _hierarchy_scene(ca, round(n * 2 / 3), colour='height')   # 107 steps at n = 160
+    return _run_scene(ca, round(n * 2 / 3), colour='height')   # 107 steps at n = 160
 
 
 @scene
@@ -278,18 +323,19 @@ def cityscape_hsv(seed=3, size=None):
     """The cityscape coloured by its coarse layers: hue from layer 3, value from layer 2,
     saturation from layer 1, each box-smoothed."""
     n = size or 160
-    return _hierarchy_scene(city.make(n=n, ic_seed=seed), n, colour='hsv')
+    return _run_scene(city.make(n=n, ic_seed=seed), n, colour='hsv')
 
 
 @scene
-def cityscape_twin(seed=3, size=None):
-    """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8).
-    Its plan was not recorded: the cityscape's plan twice, rules drawn at random from
-    the moore_families."""
+def cityscape_twin(seed=3, size=None, banks=None):
+    """Five layers with an extra full-resolution context layer (scales 1, 1, 2, 4, 8): an
+    exploratory, randomised study.  Its plan was not recorded: the cityscape's plan
+    twice, rules drawn at random from the Moore families."""
     n = size or 160
     scales = (1, 1, 2, 4, 8)
-    ca = city.make(city.draw_banks(city.PLAN * 2, seed, scales), n, scales, ic_seed=seed)
-    return _hierarchy_scene(ca, n, colour='height')
+    info = {}
+    banks = _tables(info, banks, lambda: city.draw_banks(city.PLAN * 2, seed, scales))
+    return _run_scene(city.make(banks, n, scales, ic_seed=seed), n, colour='height', info=info)
 
 
 # ---------------------------------------------------------------- saved finds
@@ -307,7 +353,8 @@ def from_saved(name, seed=None, size=None):
         return Scene(st == deposition.FROZEN, info={'steps': steps, 'stop': why})
     if entry.kind == 'hierarchy':
         n = size or settings.get('n', 160)
-        return _hierarchy_scene(entry.build(n, seed), n, colour='height')
+        ca = entry.build(n, seed)
+        return _run_scene(ca, n, colour='height')
     if entry.kind == 'wolfram':
         raise ValueError('1D rules make images, not volumes: use scripts/find_rules.py --render')
     assay = entry.assay()
@@ -315,10 +362,7 @@ def from_saved(name, seed=None, size=None):
     space = entry.space()
     traj = assay.run(space, entry.table()[None], record=space.ndim == 2)
     vol = traj.history[0] if space.ndim == 2 else traj.final[0].astype(bool)
-    info = {'uncut_density': float(vol.mean())}
-    if vol.mean() > 0.3:          # opaque from outside: remove the corner facing the camera
-        vol = cut_octant(vol)
-    return Scene(vol, info=info)
+    return Scene(cut_if_dense(vol), info={'uncut_density': float(vol.mean())})
 
 
 def build(name, seed=None, size=None):

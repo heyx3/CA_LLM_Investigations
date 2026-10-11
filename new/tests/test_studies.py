@@ -8,9 +8,8 @@ import numpy as np
 import pytest
 
 from ca3d.analysis import banks, dynamics, search
-from ca3d.render3D import scenes
 from ca3d.rulesets import life
-from ca3d.studies import cityscape, experiments, hierarchy_designs, moore_families, saved
+from ca3d.studies import cityscape, experiments, hierarchy_designs, moore_families, saved, scenes
 
 
 def test_family_pools_hold_members_of_their_family():
@@ -179,3 +178,11 @@ def test_pool_drawing_experiments_replay_their_rulesets(name):
     records = json.loads(json.dumps(first['rulesets'].rows))
     again = experiments.EXPERIMENTS[name](quick=True, log=quiet, rulesets=records)
     assert first['runs'].rows == again['runs'].rows
+
+
+@pytest.mark.parametrize('name', ['hierarchy_random', 'hierarchy_moore', 'cityscape_twin'])
+def test_randomised_scenes_rebuild_from_their_tables(name):
+    first = scenes.SCENES[name](size=32)
+    given = {k: first.info[k] for k in ('banks', 'states_rng') if k in first.info}
+    again = scenes.SCENES[name](size=32, **given)
+    assert np.array_equal(first.volume, again.volume)

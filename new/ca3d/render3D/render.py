@@ -11,12 +11,28 @@ shadow rays toward a directional light also share one direction.  `trace` theref
 takes a single direction for the whole batch.
 
 Shading per hit: a flat floor term, plus a shadowless directional "fill" light, plus
-a key light whose contribution is gated by one shadow ray, then gamma.  Face normals
-are free: they are the axis the ray last stepped across.
+a key light whose contribution is gated by one shadow ray.  Face normals are free: they
+are the axis the ray last stepped across.
+
+What a render is made of, each a small dataclass:
+
+  Camera     image size and viewpoint
+  ColorMode  each visible voxel's base colour: by height, a scalar field, a palette
+             index, or any function
+  Lighting   the lights
+  PostFX     what is done to the finished image: the background, gamma
+  Scene      a volume together with all of the above, ready to render or save
+
+Every colour given to the renderer (ramps, palettes, the background) is in linear RGB,
+[0, 1] per channel: shading multiplies linear values, and PostFX's gamma turns the
+result into display values at the end.  A colour meant to be seen exactly as given
+must be converted to linear by its owner.
 
 Volumes are indexed [x, y, z] with z up on screen.
 """
+import dataclasses
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 from PIL import Image
@@ -37,16 +53,77 @@ class Camera:
 @dataclass
 class Lighting:
     """Light directions and strengths.  The key light casts shadows; the fill light
-    does not.  `floor` is the ambient level every surface gets, and `gamma` converts
-    the linear brightness to display values."""
+    does not.  `floor` is the ambient level every surface gets."""
     key_dir: tuple = (0.55, 0.30, 0.78)     # toward the key light, which casts shadows
     fill_dir: tuple = (-0.35, -0.55, 0.76)  # toward the shadowless fill light
     floor: float = 0.13
     fill: float = 0.42
     key: float = 0.78
     shadows: bool = True
+
+
+@dataclass
+class PostFX:
+    """What is done to the finished image.  `background` (linear RGB) fills every pixel
+    whose ray hits nothing; in principle it should also inform Lighting.floor, but it
+    does not yet.  `gamma` turns linear values into display values (1: none)."""
     background: tuple = (0.055, 0.06, 0.085)
     gamma: float = 2.2
+
+    def display(self, rgb):
+        """Linear RGB in [0, 1] (any shape (..., 3)) -> display values in [0, 1]."""
+        return np.clip(np.asarray(rgb, np.float64), 0, 1) ** (1 / self.gamma)
+
+    def finish(self, image):
+        """A linear (H, W, 3) image -> uint8 display image."""
+        return (self.display(image) * 255).astype(np.uint8)
+
+
+@dataclass
+class ColorMode:
+    """How each visible voxel gets its base colour (linear RGB); build one with
+    height(), field(), indexed() or custom().
+
+      'height'   the voxel's height z / (Z - 1) mapped through `ramp` (the default)
+      'field'    `values`, a float volume in [0, 1], mapped through `ramp`
+      'indexed'  `values`, an integer volume, looked up in `palette` (K, 3)
+      'custom'   `fn(voxels, shape)`: the (N, 3) int voxels hit and the volume's shape
+                 -> (N, 3) RGB, for any other scheme
+    """
+    kind: str = 'height'
+    ramp: tuple = tuple(DEFAULT_RAMP)
+    values: np.ndarray | None = None
+    palette: np.ndarray | None = None
+    fn: Callable | None = None
+
+    @classmethod
+    def height(cls, ramp=DEFAULT_RAMP):
+        return cls('height', tuple(ramp))
+
+    @classmethod
+    def field(cls, values, ramp=DEFAULT_RAMP):
+        return cls('field', tuple(ramp), values=values)
+
+    @classmethod
+    def indexed(cls, values, palette):
+        return cls('indexed', values=values, palette=palette)
+
+    @classmethod
+    def custom(cls, fn):
+        return cls('custom', fn=fn)
+
+    def colours(self, shape, voxels):
+        """Base colour (N, 3) of the voxels (N, 3) of a volume of `shape`."""
+        x, y, z = np.asarray(voxels).T
+        if self.kind == 'indexed':
+            return np.asarray(self.palette, np.float64)[np.asarray(self.values)[x, y, z]]
+        if self.kind == 'field':
+            return apply_ramp(np.asarray(self.values, np.float64)[x, y, z], self.ramp)
+        if self.kind == 'height':
+            return apply_ramp(z / max(shape[2] - 1, 1), self.ramp)
+        if self.kind == 'custom':
+            return np.asarray(self.fn(np.asarray(voxels), shape), np.float64)
+        raise ValueError(f'unknown colour mode {self.kind!r}')
 
 
 @dataclass
@@ -157,28 +234,14 @@ def primary_rays(shape, camera):
     return origins.reshape(-1, 3), fwd
 
 
-def surface_colour(shape, hits, attr=None, palette=None, ramp=DEFAULT_RAMP):
-    """Base colour (N, 3) of every hit voxel.
-
-    * palette given: `attr` is an integer index volume into palette (K, 3)
-    * attr only:     `attr` is a float volume in [0, 1] mapped through `ramp`
-    * neither:       the voxel's height z / (Z - 1) mapped through `ramp`
-    """
-    x, y, z = hits.voxel.T
-    if palette is not None:
-        return np.asarray(palette, np.float64)[np.asarray(attr)[x, y, z]]
-    if attr is not None:
-        value = np.asarray(attr, np.float64)[x, y, z]
-    else:
-        value = z / max(shape[2] - 1, 1)
-    return apply_ramp(value, ramp)
-
-
-def render(occ, attr=None, palette=None, camera=None, lighting=None, ramp=DEFAULT_RAMP):
-    """Render a boolean volume; returns an (H, W, 3) uint8 image."""
+def render(occ, color=None, camera=None, lighting=None, postfx=None):
+    """Render a boolean volume; returns an (H, W, 3) uint8 image.  Each setting
+    defaults to its class's defaults (a height-coloured isometric view)."""
     occ = np.asarray(occ, bool)
+    color = color or ColorMode()
     camera = camera or Camera()
     lighting = lighting or Lighting()
+    postfx = postfx or PostFX()
     origins, fwd = primary_rays(occ.shape, camera)
     hits = trace(occ, origins, fwd)
 
@@ -194,13 +257,37 @@ def render(occ, attr=None, palette=None, camera=None, lighting=None, ramp=DEFAUL
     light = (lighting.floor
              + lighting.fill * np.clip(normal @ fill, 0, None)
              + lighting.key * key_term)
-    hit_only = Hits(hits.hit[h], hits.voxel[h], normal, hits.t[h])
-    colour = surface_colour(occ.shape, hit_only, attr, palette, ramp) * light[:, None]
+    colour = color.colours(occ.shape, hits.voxel[h]) * light[:, None]
 
-    image = np.tile(np.asarray(lighting.background, np.float64), (len(origins), 1))
+    image = np.tile(np.asarray(postfx.background, np.float64), (len(origins), 1))
     image[h] = colour
-    image = np.clip(image, 0, 1) ** (1 / lighting.gamma)
-    return (image.reshape(camera.height, camera.width, 3) * 255).astype(np.uint8)
+    return postfx.finish(image.reshape(camera.height, camera.width, 3))
+
+
+@dataclass
+class Scene:
+    """A volume and everything needed to draw it.  `info` holds facts about how the
+    volume was made (steps taken, uncut density, the rule tables drawn...)."""
+    volume: np.ndarray                  # bool [x, y, z], z up
+    color: ColorMode = dataclasses.field(default_factory=ColorMode)
+    camera: Camera = dataclasses.field(default_factory=Camera)
+    lighting: Lighting = dataclasses.field(default_factory=Lighting)
+    postfx: PostFX = dataclasses.field(default_factory=PostFX)
+    info: dict = dataclasses.field(default_factory=dict)
+
+    def render(self, **settings):
+        """The (H, W, 3) uint8 image; keyword settings (color, camera, lighting, postfx)
+        replace the scene's own for this render."""
+        kw = {k: settings.pop(k, getattr(self, k)) for k in ('color', 'camera', 'lighting', 'postfx')}
+        if settings:
+            raise TypeError(f'unknown render settings {sorted(settings)}')
+        return render(self.volume, **kw)
+
+    def save(self, path, size=None, **settings):
+        """Render to a PNG file; `size` makes the image size x size pixels."""
+        if size is not None:
+            settings['camera'] = dataclasses.replace(settings.get('camera', self.camera), width=size, height=size)
+        save_png(self.render(**settings), path)
 
 
 def cut_octant(occ, size=None):
@@ -212,6 +299,12 @@ def cut_octant(occ, size=None):
         size = out.shape[0] * 11 // 24
     out[-size:, -size:, -size:] = False
     return out
+
+
+def cut_if_dense(occ, above=0.3, size=None):
+    """`occ` with its camera-facing corner cut away (cut_octant) if it is denser than
+    `above`, as the scenes show volumes too dense to see into; otherwise `occ` itself."""
+    return cut_octant(occ, size) if np.mean(occ) > above else occ
 
 
 def save_png(image, path):

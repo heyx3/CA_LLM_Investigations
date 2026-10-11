@@ -11,4 +11,6 @@ of CA is named after it.
                      other hierarchies are judged by
   saved              a catalogue of rules and configurations worth keeping
   experiments        named, re-runnable experiments, each asking one question
+  scenes             named, ready-to-render recipes for every construction (and saved
+                     finds), and hierarchy_scene for colouring any hierarchy's run
 """

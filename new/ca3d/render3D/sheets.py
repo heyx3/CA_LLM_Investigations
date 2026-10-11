@@ -8,9 +8,9 @@ empty cell.  Images are scaled to fit a `thumb` x `thumb` cell, keeping their sh
 """
 from PIL import Image, ImageDraw, ImageFont
 
-from .render import Lighting
+from .render import PostFX
 
-BACKGROUND = tuple(int(255 * c ** (1 / Lighting().gamma)) for c in Lighting().background)
+BACKGROUND = tuple(int(255 * c) for c in PostFX().display(PostFX().background))
 TEXT = (220, 222, 230)
 DIM = (150, 154, 168)
 LINES = ((TEXT, 14), ((190, 194, 206), 13), (DIM, 12))     # (colour, size) of caption lines 1-3

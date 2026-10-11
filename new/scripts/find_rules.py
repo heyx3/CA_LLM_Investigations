@@ -31,7 +31,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import dynamics, metrics, search                  # noqa: E402
-from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
+from ca3d.render3D.render import Scene, cut_if_dense                  # noqa: E402
 from ca3d.studies import saved                                        # noqa: E402
 
 SPACES = {
@@ -82,9 +82,7 @@ def render_rule(space, table, assay, path, res):
                                                      Image.NEAREST).save(path)
         return
     V = traj.history[0] if space.ndim == 2 else traj.final[0].astype(bool)
-    if V.mean() > 0.3:
-        V = cut_octant(V, V.shape[0] * 11 // 24)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
 
 
 def main():

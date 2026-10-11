@@ -125,7 +125,7 @@ sys.path.insert(0, str(ROOT))
 from ca3d.analysis import banks, metrics, search                       # noqa: E402
 from ca3d.analysis.search import Criterion                             # noqa: E402
 from ca3d.render3D import sheets                                       # noqa: E402
-from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
+from ca3d.render3D.render import ColorMode, Scene, cut_if_dense       # noqa: E402
 from ca3d.studies import cityscape as city, moore_families             # noqa: E402
 from ca3d.studies.hierarchy_designs import DrawLog, slot_name          # noqa: E402
 
@@ -298,9 +298,7 @@ def _soup_name(family):
 def render_bank(job):
     table, family, path, res = job
     V = own_soup(family).run(moore_families.MOORE, table[None], record=True).history[0]
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
     return path
 
 
@@ -387,9 +385,7 @@ def run_city(job):
 def render_city(job):
     tables, seed, path, res = job
     V = city.make(tables, city.N, ic_seed=seed).run(city.N).fine
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V)).save(path, res)
     return path
 
 
@@ -593,9 +589,7 @@ def render_noise(job):
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
         attr[masks[name]] = k
-    if V.mean() > 0.3:
-        V = cut_octant(V)
-    save_png(render(V, attr=attr, palette=NOISE_PALETTE, camera=Camera(res, res)), path)
+    Scene(cut_if_dense(V), ColorMode.indexed(attr, NOISE_PALETTE)).save(path, res)
     return path
 
 
@@ -752,12 +746,12 @@ def render_noise_panels(job):
     attr = np.zeros(V.shape, np.uint8)
     for k, name in enumerate(('flicker', 'hair', 'line', 'speckle'), 1):
         attr[masks[name]] = k
-    full = cut_octant(V) if V.mean() > 0.3 else V
-    save_png(render(full, camera=Camera(res, res)), f'{stem}_plain.png')
-    save_png(render(full, attr=attr, palette=NOISE_PALETTE, camera=Camera(res, res)), f'{stem}_noise.png')
+    full = cut_if_dense(V)
+    Scene(full).save(f'{stem}_plain.png', res)
+    Scene(full, ColorMode.indexed(attr, NOISE_PALETTE)).save(f'{stem}_noise.png', res)
     n, c = V.shape[0], CLOSE_UP
     box = (slice(n // 2 - c // 2, n // 2 + c // 2),) * 2 + (slice(V.shape[2] - 2 * c, None),)
-    save_png(render(V[box], attr=attr[box], palette=NOISE_PALETTE, camera=Camera(res, res)), f'{stem}_close.png')
+    Scene(V[box], ColorMode.indexed(attr[box], NOISE_PALETTE)).save(f'{stem}_close.png', res)
     return stem
 
 
@@ -909,8 +903,8 @@ def render_dismantle(job):
     table, stem, res = job
     V, streets = moore_families.handover_run(table)
     C = np.repeat((~streets)[..., None], V.shape[-1], axis=-1).astype(np.uint8)    # 0 street, 1 building
-    save_png(render(V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}.png')
-    save_png(render(~V, attr=C, palette=DISMANTLE_PALETTE, camera=Camera(res, res)), f'{stem}_flip.png')
+    Scene(V, ColorMode.indexed(C, DISMANTLE_PALETTE)).save(f'{stem}.png', res)
+    Scene(~V, ColorMode.indexed(C, DISMANTLE_PALETTE)).save(f'{stem}_flip.png', res)
     return stem
 
 

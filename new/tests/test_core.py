@@ -245,5 +245,12 @@ def test_render_shapes_and_palette_mode():
     assert render.render(occ, camera=cam).shape == (48, 64, 3)
     index = np.zeros(occ.shape, np.int64)
     index[:, :, 8:] = 1
-    img = render.render(occ, attr=index, palette=np.array([[1, 0, 0], [0, 1, 0]]), camera=cam)
+    img = render.render(occ, render.ColorMode.indexed(index, np.array([[1, 0, 0], [0, 1, 0]])), camera=cam)
     assert img[..., 0].max() > 0 and img[..., 1].max() > 0
+    # a custom colour mode, and gamma 1 leaving linear values as they are
+    red = render.ColorMode.custom(lambda voxels, shape: np.tile([1.0, 0, 0], (len(voxels), 1)))
+    flat = render.Lighting(floor=1.0, fill=0.0, key=0.0, shadows=False)
+    img = render.render(occ, red, cam, flat, render.PostFX(background=(0, 0, 0), gamma=1.0))
+    assert set(np.unique(img[..., 0])) == {0, 255} and img[..., 1:].max() == 0
+    scene = render.Scene(occ, red, cam)
+    assert np.array_equal(scene.render(), render.render(occ, red, cam))

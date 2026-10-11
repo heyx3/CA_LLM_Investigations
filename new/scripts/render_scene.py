@@ -12,8 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import metrics                     # noqa: E402
-from ca3d.render3D import scenes                      # noqa: E402
-from ca3d.studies import saved                        # noqa: E402
+from ca3d.studies import saved, scenes                # noqa: E402
 from ca3d.render3D.render import Camera, save_png    # noqa: E402
 
 

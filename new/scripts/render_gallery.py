@@ -1,4 +1,4 @@
-"""Build and render every scene in ca3d.render3D.scenes, plus the 1D hierarchy image,
+"""Build and render every scene in ca3d.studies.scenes, plus the 1D hierarchy image,
 and assemble a labelled contact sheet.  --saved renders the saved rules instead
 (data/saved_rules.json), into <out>/saved.
 
@@ -16,9 +16,9 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import metrics                     # noqa: E402
-from ca3d.render3D import scenes, sheets              # noqa: E402
+from ca3d.render3D import sheets                      # noqa: E402
 from ca3d.render3D.render import Camera, save_png    # noqa: E402
-from ca3d.studies import saved                        # noqa: E402
+from ca3d.studies import saved, scenes                # noqa: E402
 
 
 def main():

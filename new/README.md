@@ -35,7 +35,8 @@ Suggested reading order: `rules`, `wolfram`, `life`, `hierarchy`, then `studies/
 
 Each package only imports the ones before it: `rulesets` (the CAs themselves) ←
 `analysis` (general measures and search tools) ← `studies` (particular CAs analysed in
-depth, and the finds). `render3D/scenes.py` also draws on `studies` for its scenes.
+depth, and the finds). `render3D` (volumes to pictures) imports nothing else from
+`ca3d`, so any of them may use it.
 
 **`ca3d/rulesets/`**: the cellular automata: engines and rule tables, with no
 knowledge of any analysis.
@@ -75,14 +76,15 @@ specific to one kind of CA is named after it.
 | `cityscape.py` | the reference cityscape (its rule tables and `make`), its `DESIGN`, `draw_banks` for new rule sets in its style, context plans, measured profile, and the bands other hierarchies are judged by |
 | `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
+| `scenes.py` | named, ready-to-render recipes for every construction, scenes for saved rules, and `hierarchy_scene` for colouring any hierarchy's run |
 
-**`ca3d/render3D/`**: turning volumes into pictures.
+**`ca3d/render3D/`**: turning volumes into pictures. Every colour given to it is linear
+RGB; `PostFX`'s gamma makes display values at the end.
 
 | module | what it is |
 | --- | --- |
-| `render.py` | orthographic isometric voxel renderer (ray marching) with shadows |
+| `render.py` | orthographic isometric voxel renderer (ray marching) with shadows, and its settings: `Camera`, `ColorMode` (by height, field, palette index, or any function), `Lighting`, `PostFX` (background, gamma), and `Scene` (a volume with all of them) |
 | `color.py` | ramps, HSV layer palette, 2D colourisers |
-| `scenes.py` | named recipes for every construction, plus scenes for saved rules |
 | `sheets.py` | contact sheets: many renders with captions on one image |
 
 Scripts: `render_scene.py` and `render_gallery.py` (images; both take saved-rule names),
