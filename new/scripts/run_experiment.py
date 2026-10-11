@@ -5,9 +5,15 @@
     python scripts/run_experiment.py --all --quick          # smoke-test every experiment
 
 Output is printed and, unless --no-save, written to out/experiments/<name>.txt with
-one CSV per table.
+one CSV per table.  Experiments that draw rule sets from the family pools also write
+<name>.rulesets.json, every rule set they used; --rulesets DIR reruns them on the rule
+sets recorded in DIR instead of drawing again (the pools may have changed since):
+
+    python scripts/run_experiment.py context_plans --rulesets out/experiments
 """
 import argparse
+import inspect
+import json
 import sys
 import time
 from pathlib import Path
@@ -25,6 +31,8 @@ def main():
     parser.add_argument('--quick', action='store_true', help='tiny sizes: a smoke test')
     parser.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out' / 'experiments')
     parser.add_argument('--no-save', action='store_true')
+    parser.add_argument('--rulesets', type=Path, metavar='DIR',
+                        help='rerun on the rule sets recorded in DIR/<name>.rulesets.json')
     args = parser.parse_args()
 
     if args.list or not (args.names or args.all):
@@ -47,13 +55,22 @@ def main():
         log(f'#### {name}{" (quick)" if args.quick else ""}')
         log(' '.join(fn.__doc__.split()))
         t0 = time.perf_counter()
-        tables = fn(quick=args.quick, log=log)
+        kw = {}
+        if args.rulesets:
+            if 'rulesets' not in inspect.signature(fn).parameters:
+                parser.error(f'{name} does not draw rule sets')
+            kw['rulesets'] = json.loads((args.rulesets / f'{name}.rulesets.json').read_text(encoding='utf-8'))
+            log(f'(rule sets replayed from {args.rulesets / f"{name}.rulesets.json"})')
+        tables = fn(quick=args.quick, log=log, **kw)
         log(f'\n[{name}: {time.perf_counter() - t0:.1f}s]\n')
         if not args.no_save:
             out.mkdir(parents=True, exist_ok=True)
             (out / f'{name}.txt').write_text('\n'.join(lines) + '\n')
             for key, table in tables.items():
-                table.to_csv(out / f'{name}.{key}.csv')
+                if key == 'rulesets':
+                    (out / f'{name}.rulesets.json').write_text(json.dumps(table.rows, indent=1), encoding='utf-8')
+                else:
+                    table.to_csv(out / f'{name}.{key}.csv')
 
 
 if __name__ == '__main__':

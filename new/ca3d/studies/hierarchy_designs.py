@@ -15,6 +15,15 @@ and its start seed), so it rebuilds identically even after the pools change.
 The cityscape's design is cityscape.DESIGN; the reference cityscape is one instance of
 it (cityscape.REFERENCE_BANKS, ic_seed 3).
 
+Studies that draw rule sets from the pools keep them reproducible with a DrawLog: every
+rule set a study uses is recorded under a key, and the study can be run again from that
+record, taking the recorded tables instead of drawing (which the pools may no longer
+give):
+
+    log = DrawLog(recorded)                     # recorded: an earlier log.records(), or None
+    banks = log.get('plan 4/2/2 seed 3', lambda: cityscape.draw_banks(plan, 3), labels)
+    log.save(out / 'rulesets.json')
+
 Conventions.  How a seed becomes tables and starting states has been done two ways,
 and both are kept, so that every seed recorded so far still gives the same CA:
 
@@ -32,7 +41,9 @@ and both are kept, so that every seed recorded so far still gives the same CA:
 Rotation is written as text: 'none', 'every<steps>' (hierarchy.RotateEvery) or
 'ladder' / 'ladder<delta>' (hierarchy.RotateOnDensityLadder, delta 0.05 by default).
 """
+import json
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 
 import numpy as np
 
@@ -271,3 +282,64 @@ class Instance:
         banks = [np.array([from_hex(h, hierarchy.NEIGHBOURHOODS['moore'].n_patterns) for h in layer], np.uint8) for layer in d['banks']]
         extra = {f.name: d[f.name] for f in fields(cls) if f.name not in ('design', 'banks', 'ic_seed') and f.name in d}
         return cls(Design.from_json(d['design']), banks, d['ic_seed'], **extra)
+
+
+# ---------------------------------------------------------------- recording draws
+
+class DrawLog:
+    """The rule sets a study uses, by key: drawn (and recorded), or, given the records
+    of an earlier run, read back from them instead of drawn.
+
+    recorded  None to draw; otherwise records as from records() or load(), a list of
+              {'key', 'banks', ...}.  Replaying, a key with no record is an error: the
+              study is not silently drawn again."""
+
+    def __init__(self, recorded=None):
+        self.recorded = None if recorded is None else {r['key']: r for r in recorded}
+        self._made = {}
+
+    @property
+    def replaying(self):
+        return self.recorded is not None
+
+    def get(self, key, draw, labels=None, **info):
+        """The rule banks (one (contexts, 512) array per layer) for `key`: draw() when
+        drawing, the recorded tables when replaying.  `labels` (each bank's family, in
+        the same nesting) and `info` (seeds, names: anything JSON) are recorded with
+        them; replaying, info(key) gives the recorded info back."""
+        if self.replaying:
+            if key not in self.recorded:
+                raise KeyError(f'no recorded rule set {key!r}')
+            r = self.recorded[key]
+            banks = hierarchy.parse_banks(r['banks'] if isinstance(r['banks'], list) else json.loads(r['banks']))
+            info = {k: v for k, v in r.items() if k not in ('key', 'banks')}
+        else:
+            banks = [np.asarray(b, np.uint8) for b in draw()]
+        self._made[key] = {'key': key, 'banks': hierarchy.format_banks(banks, labels), **info}
+        return banks
+
+    def note(self, key, **info):
+        """Record more with `key` after get(), e.g. the state a draw left a generator in."""
+        if not self.replaying:
+            self._made[key].update(info)
+
+    def info(self, key):
+        """What was recorded with `key` besides its tables."""
+        source = self.recorded if self.replaying else self._made
+        return {k: v for k, v in source[key].items() if k not in ('key', 'banks')}
+
+    def keys(self):
+        """The recorded keys (replaying), in recorded order."""
+        return list(self.recorded) if self.replaying else list(self._made)
+
+    def records(self):
+        """Every rule set used so far, in use order: [{'key', 'banks', ...}]."""
+        return list(self._made.values())
+
+    def save(self, path):
+        Path(path).write_text(json.dumps(self.records(), indent=1), encoding='utf-8')
+
+    @staticmethod
+    def load(path):
+        """Records saved by save() (or a list of them in any JSON file)."""
+        return json.loads(Path(path).read_text(encoding='utf-8'))

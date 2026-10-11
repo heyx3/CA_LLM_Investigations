@@ -154,3 +154,28 @@ def test_instances_save_and_rebuild_exactly(tmp_path):
     entry = saved.get('city', path)
     assert same_run(entry.build(), inst.build(64)) and same_run(entry.build(48, 9), inst.build(48, 9))
     assert entry.settings['banks'][3][0][0] == 'frozen'
+
+
+# ---------------------------------------------------------------- recording and replaying draws
+
+def test_draw_log_records_and_replays():
+    reference = cityscape.reference_banks()
+    draws = hierarchy_designs.DrawLog()
+    draws.get('ref', lambda: reference, cityscape.DESIGN.slot_families(), ic_seed=3)
+    draws.note('ref', extra='kept')
+    replay = hierarchy_designs.DrawLog(json.loads(json.dumps(draws.records())))
+    assert replay.replaying and replay.keys() == ['ref']
+    again = replay.get('ref', None)
+    assert all(np.array_equal(a, b) for a, b in zip(again, reference))
+    assert replay.info('ref') == {'ic_seed': 3, 'extra': 'kept'}
+    with pytest.raises(KeyError):               # replaying never silently draws again
+        replay.get('other', lambda: reference)
+
+
+@pytest.mark.parametrize('name', ['context_plans', 'layer_ablation'])
+def test_pool_drawing_experiments_replay_their_rulesets(name):
+    quiet = lambda *a: None                     # noqa: E731
+    first = experiments.EXPERIMENTS[name](quick=True, log=quiet)
+    records = json.loads(json.dumps(first['rulesets'].rows))
+    again = experiments.EXPERIMENTS[name](quick=True, log=quiet, rulesets=records)
+    assert first['runs'].rows == again['runs'].rows

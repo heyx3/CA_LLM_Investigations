@@ -90,6 +90,13 @@ sample of the pool.  Output: out/bank_metrics/dismantle/ (sheet.png, sheet_flip.
 
     python scripts/bank_metrics.py --dismantle --anchors out/bank_metrics/dismantle/anchors.json
 
+Every study that builds cities (--cityscape, --noise, --hair-test, --dead-cap) writes
+rulesets.json beside its summary: each city's tables and start seed, under a key.
+--replay FILE builds the same study's cities from such a record instead of drawing
+them, so a study can be repeated after the pools have changed:
+
+    python scripts/bank_metrics.py --noise --replay out/bank_metrics/noise/rulesets.json
+
 --activity [FAMILY] gives every bank of a family (default dead) one number for how
 active it is.  A cell counts as active at a step if it is alive then or one step
 before (anything but 'empty and staying empty'); shares are taken over the second half
@@ -120,7 +127,7 @@ from ca3d.analysis.search import Criterion                             # noqa: E
 from ca3d.render3D import sheets                                       # noqa: E402
 from ca3d.render3D.render import Camera, cut_octant, render, save_png  # noqa: E402
 from ca3d.studies import cityscape as city, moore_families             # noqa: E402
-from ca3d.studies.hierarchy_designs import slot_name                   # noqa: E402
+from ca3d.studies.hierarchy_designs import DrawLog, slot_name          # noqa: E402
 
 OUT = ROOT / 'out' / 'bank_metrics'
 HIER_SEARCH = ROOT / 'out' / 'hier_search'      # scripts/search_hierarchies.py's output
@@ -386,6 +393,16 @@ def render_city(job):
     return path
 
 
+def city_draws(args):
+    """A DrawLog of the cities a study builds: replaying --replay, or drawing."""
+    return DrawLog(DrawLog.load(args.replay) if args.replay else None)
+
+
+def city_families():
+    """Every slot's family in a city of the cityscape's design (recorded with its tables)."""
+    return city.DESIGN.slot_families()
+
+
 def city_line(row):
     return (f'dens {row["density"]:.2f}  coh {row["coherence"]:.1f}  void {row["void"]:.2f}  '
             f'ctx {row["context_info"]:.2f}')
@@ -431,21 +448,35 @@ def cityscape_test(args, census, family, log):
         return [np.array([nearest(f, targets[l][c], rng) for c, f in enumerate(layer)])
                 for l, layer in enumerate(ref_families)]
 
-    seeds = list(range(1, args.draws + 1))
-    drawn = {s: draw_near(s) for s in seeds}
+    draws, fams = city_draws(args), city_families()
+    if draws.replaying:
+        seeds = [draws.info(k)['ic_seed'] for k in draws.keys() if k.startswith('near ')]
+    else:
+        seeds = list(range(1, args.draws + 1))
+    drawn = {s: draws.get(f'near {s}', lambda s=s: draw_near(s), fams, ic_seed=s) for s in seeds}
     sweeps = []                     # (group, slider, value, banks)
-    for group, slots in GROUPS.items():
+    if draws.replaying:
+        for k in draws.keys():
+            if k.startswith('sweep '):
+                i = draws.info(k)
+                sweeps.append((i['group'], i['slider'], i['value'], draws.get(k, None, fams, **i)))
+    for group, slots in ({} if draws.replaying else GROUPS).items():
         for j, slider in enumerate(SLIDERS):
             spread = np.ptp(positions[ref_families[slots[0][0]][slots[0][1]]][:, j])
             if spread < 0.5:        # e.g. grain of dead rules: undefined, all 0.5
                 continue
             for v in args.sweep_values:
-                tables = [layer.copy() for layer in reference]
-                for l, c in slots:
-                    target = targets[l][c].copy()
-                    target[j] = v
-                    tables[l][c] = nearest(ref_families[l][c], target)
+                def make(slots=slots, j=j, v=v):
+                    tables = [layer.copy() for layer in reference]
+                    for l, c in slots:
+                        target = targets[l][c].copy()
+                        target[j] = v
+                        tables[l][c] = nearest(ref_families[l][c], target)
+                    return tables
+                tables = draws.get(f'sweep {group} {slider} {v:g}', make, fams,
+                                   group=group, slider=slider, value=v, ic_seed=3)
                 sweeps.append((group, slider, v, tables))
+    draws.save(out / 'rulesets.json')
 
     t0 = time.perf_counter()
     with ProcessPoolExecutor(args.jobs) as pool:
@@ -585,9 +616,16 @@ def noise_study(args, census, family, log):
         outer(line)
         lines.append(str(line))
 
-    pools = moore_families.load_pools()
-    seeds = list(range(1, args.noise_draws + 1))
-    jobs = [(city.reference_banks(), 3)] + [(city.draw_banks(seed=s, pools=pools), s) for s in seeds]
+    draws, fams = city_draws(args), city_families()
+    if draws.replaying:
+        seeds = [draws.info(k)['ic_seed'] for k in draws.keys() if k.startswith('draw ')]
+    else:
+        pools = moore_families.load_pools()
+        seeds = list(range(1, args.noise_draws + 1))
+    jobs = [(city.reference_banks(), 3)] + [
+        (draws.get(f'draw {s}', lambda s=s: city.draw_banks(seed=s, pools=pools), fams, ic_seed=s), s)
+        for s in seeds]
+    draws.save(out / 'rulesets.json')
     t0 = time.perf_counter()
     with ProcessPoolExecutor(args.jobs) as pool:
         results = list(pool.map(noise_record, jobs, chunksize=2))
@@ -640,8 +678,9 @@ def noise_study(args, census, family, log):
             ids, rates = [], []
             for (tables, _), r in zip(jobs[1:], draws):
                 for c, g in enumerate(plan):
-                    if g == f and r['solid_by_context'][c] >= args.min_solid:
-                        ids.append(index[tables[0][c].tobytes()])
+                    i = index.get(tables[0][c].tobytes())       # None: replayed, no longer pooled
+                    if g == f and i is not None and r['solid_by_context'][c] >= args.min_solid:
+                        ids.append(i)
                         rates.append(r[f'{name}_by_context'][c] / r['solid_by_context'][c])
             ids, rates = np.array(ids), np.array(rates)
             rho = {}
@@ -663,7 +702,8 @@ def noise_study(args, census, family, log):
     rho = {}
     for layer in range(1, len(jobs[0][0])):
         for col in columns:
-            x = np.array([_nanmean([values[col][index[t.tobytes()]] for t in tables[layer]])
+            x = np.array([_nanmean([values[col][index[t.tobytes()]] for t in tables[layer]
+                                    if t.tobytes() in index] or [np.nan])
                           for tables, _ in jobs[1:]])
             if np.isfinite(x).mean() > 0.8 and np.nanstd(x) > 0:
                 rho[f'L{layer} {col}'] = spearmanr(x, city_rate, nan_policy='omit')[0]
@@ -769,18 +809,28 @@ def hair_test(args, census, family, log):
     def key(tables):
         return b''.join(np.ascontiguousarray(t).tobytes() for t in tables)
 
+    draws, fams = city_draws(args), city_families()
+
+    def cell(row, i, make, seed, name):
+        """One city of the layout: (tables, start seed, name), recorded as row + index."""
+        return draws.get(f'{row}{i}', make, fams, ic_seed=seed, name=name), seed, name
+
     judged = list(city.JUDGED_DRAWS)
     judged_tables = {name: city.judged_banks(name) for name in judged}
     judged_seed = {name: city.JUDGED_DRAWS[name]['ic_seed'] for name in judged}
     seen = {key(t) for t in judged_tables.values()}
-    scanned = {s: draw(s) for s in range(1, args.scan + 1)}
-    with ProcessPoolExecutor(args.jobs) as pool:
-        scan = list(pool.map(run_city, [(t, s) for s, t in scanned.items()], chunksize=2))
-    hair_of = np.array([r['hair'] for r in scan])
-    hairiest = [int(i) + 1 for i in np.argsort(-hair_of) if key(scanned[int(i) + 1]) not in seen][:args.per_row]
-    log(f'hair over random rule draws 1-{args.scan}: p10 {np.percentile(hair_of, 10):.3f}, median '
-        f'{np.median(hair_of):.3f}, p90 {np.percentile(hair_of, 90):.3f}, max {hair_of.max():.3f}; '
-        f'hairiest {hairiest}')
+    if draws.replaying:
+        hairiest = [draws.info(k)['ic_seed'] for k in draws.keys() if k.startswith('G')]
+        log(f'rule draws replayed from {args.replay}; hairiest {hairiest}')
+    else:
+        scanned = {s: draw(s) for s in range(1, args.scan + 1)}
+        with ProcessPoolExecutor(args.jobs) as pool:
+            scan = list(pool.map(run_city, [(t, s) for s, t in scanned.items()], chunksize=2))
+        hair_of = np.array([r['hair'] for r in scan])
+        hairiest = [int(i) + 1 for i in np.argsort(-hair_of) if key(scanned[int(i) + 1]) not in seen][:args.per_row]
+        log(f'hair over random rule draws 1-{args.scan}: p10 {np.percentile(hair_of, 10):.3f}, median '
+            f'{np.median(hair_of):.3f}, p90 {np.percentile(hair_of, 90):.3f}, max {hair_of.max():.3f}; '
+            f'hairiest {hairiest}')
 
     k = args.per_row
     layout = [('A', 'the reference cityscape', [(reference, 3, 'reference')])]
@@ -790,17 +840,20 @@ def hair_test(args, census, family, log):
         members = corner(d_range, s_range)
         layout.append((letter, f'the reference with its 4 static banks swapped for {label} '
                                f'({len(members)} of the {len(static)} static tables)',
-                       [(swap(reference, from_set(members, np.random.default_rng(1000 + i))), 3, f'version {i + 1}')
-                        for i in range(k)]))
+                       [cell(letter, i, lambda m=members, i=i: swap(reference, from_set(m, np.random.default_rng(1000 + i))),
+                             3, f'version {i + 1}') for i in range(k)]))
     layout.append(('E', 'rule draws you judged earlier, as drawn',
                    [(judged_tables[n], judged_seed[n], n) for n in judged]))
     layout.append(('F', 'the same draws, static banks swapped for unfragmented ones of about the same density',
-                   [(swap(judged_tables[n], same_density_unfragmented(np.random.default_rng(2000 + judged_seed[n]))),
-                     judged_seed[n], f'{n}, fixed') for n in judged]))
-    layout.append(('G', f'the hairiest of {args.scan} rule draws, as drawn', [(draw(s), s, f'draw {s}') for s in hairiest]))
+                   [cell('F', i, lambda n=n: swap(judged_tables[n], same_density_unfragmented(
+                       np.random.default_rng(2000 + judged_seed[n]))), judged_seed[n], f'{n}, fixed')
+                    for i, n in enumerate(judged)]))
+    layout.append(('G', f'the hairiest of {args.scan} rule draws, as drawn',
+                   [cell('G', i, lambda s=s: draw(s), s, f'draw {s}') for i, s in enumerate(hairiest)]))
     layout.append(('H', 'the same draws, static banks swapped for unfragmented ones of about the same density',
-                   [(swap(draw(s), same_density_unfragmented(np.random.default_rng(2000 + s))), s, f'draw {s}, fixed')
-                    for s in hairiest]))
+                   [cell('H', i, lambda s=s: swap(draw(s), same_density_unfragmented(np.random.default_rng(2000 + s))),
+                         s, f'draw {s}, fixed') for i, s in enumerate(hairiest)]))
+    draws.save(out / 'rulesets.json')
 
     cities = [(letter, i, cell) for letter, _, cells in layout for i, cell in enumerate(cells)]
     path = {(letter, i): out / 'renders' / f'{letter}{i}.png' for letter, i, _ in cities}
@@ -976,41 +1029,55 @@ def dead_cap_study(args, census, family, log):
         outer(line)
         lines.append(str(line))
 
-    pools = moore_families.load_pools()
-    pool = pools['dead']
-    rows = json.loads((OUT / 'activity' / 'dead.json').read_text())
-    activity = np.array([r['activity'] for r in rows])
-    slider_of = {pool[r['pool_index']].tobytes(): r['slider'] for r in rows}
-    allowed = np.array([r['pool_index'] for r in rows if r['slider'] <= args.cap])
-
-    def slider(table):
-        key = table.tobytes()
-        if key not in slider_of:
-            slider_of[key] = float(_position(activity, activity_of(table)[2]))
-        return slider_of[key]
-
-    dead_slots = [c for c, f in enumerate(city.PLAN) if f == 'dead']
-    cities = []
-    if args.cities:
-        cities += [(c['label'], hierarchy.parse_banks(c['banks']), c['seed'])
-                   for c in json.loads(Path(args.cities).read_text())]
-    cities += [(f'plain draw {s}', city.draw_banks(seed=s, pools=pools), s) for s in range(1, args.draws + 1)]
+    draws, fams = city_draws(args), city_families()
     pairs, unchanged = [], 0
-    for label, tables, seed in cities:
-        capped = [layer.copy() for layer in tables]
-        rng = np.random.default_rng(5000 + seed)
-        notes = []
-        for c in dead_slots:
-            s = slider(tables[0][c])
-            if s > args.cap:
-                capped[0][c] = pool[rng.choice(allowed)]
-                notes.append(f'L0.{c:03b} {s:.2f} -> {slider(capped[0][c]):.2f}')
-        if notes:
-            pairs.append((label, tables, capped, seed, ', '.join(notes)))
-        else:
-            unchanged += 1
-    log(f'cap: dead activity slider <= {args.cap} ({len(allowed)} of {len(pool)} dead banks); '
-        f'{len(pairs)} cities changed, {unchanged} already under the cap')
+    if draws.replaying:
+        for k in draws.keys():
+            if k.startswith('capped '):
+                label = k.removeprefix('capped ')
+                i = draws.info(k)
+                pairs.append((label, draws.get(f'drawn {label}', None, fams, **draws.info(f'drawn {label}')),
+                              draws.get(k, None, fams, **i), i['ic_seed'], i['notes']))
+        log(f'{len(pairs)} capped cities replayed from {args.replay}')
+    else:
+        pools = moore_families.load_pools()
+        pool = pools['dead']
+        rows = json.loads((OUT / 'activity' / 'dead.json').read_text())
+        activity = np.array([r['activity'] for r in rows])
+        slider_of = {pool[r['pool_index']].tobytes(): r['slider'] for r in rows}
+        allowed = np.array([r['pool_index'] for r in rows if r['slider'] <= args.cap])
+
+        def slider(table):
+            key = table.tobytes()
+            if key not in slider_of:
+                slider_of[key] = float(_position(activity, activity_of(table)[2]))
+            return slider_of[key]
+
+        dead_slots = [c for c, f in enumerate(city.PLAN) if f == 'dead']
+        cities = []
+        if args.cities:
+            cities += [(c['label'], hierarchy.parse_banks(c['banks']), c['seed'])
+                       for c in json.loads(Path(args.cities).read_text())]
+        cities += [(f'plain draw {s}', city.draw_banks(seed=s, pools=pools), s) for s in range(1, args.draws + 1)]
+        for label, tables, seed in cities:
+            capped = [layer.copy() for layer in tables]
+            rng = np.random.default_rng(5000 + seed)
+            notes = []
+            for c in dead_slots:
+                s = slider(tables[0][c])
+                if s > args.cap:
+                    capped[0][c] = pool[rng.choice(allowed)]
+                    notes.append(f'L0.{c:03b} {s:.2f} -> {slider(capped[0][c]):.2f}')
+            if notes:
+                note = ', '.join(notes)
+                pairs.append((label, draws.get(f'drawn {label}', lambda t=tables: t, fams, ic_seed=seed),
+                              draws.get(f'capped {label}', lambda t=capped: t, fams, ic_seed=seed, notes=note),
+                              seed, note))
+            else:
+                unchanged += 1
+        log(f'cap: dead activity slider <= {args.cap} ({len(allowed)} of {len(pool)} dead banks); '
+            f'{len(pairs)} cities changed, {unchanged} already under the cap')
+    draws.save(out / 'rulesets.json')
     jobs = [(t, s) for _, a, b, s, _ in pairs for t in (a, b)]
     paths = [out / 'renders' / f'city{k}.png' for k in range(len(jobs))]
     with ProcessPoolExecutor(args.jobs) as executor:
@@ -1073,6 +1140,8 @@ def main():
     p.add_argument('--cap', type=float, default=0.8)
     p.add_argument('--cities', help='--dead-cap: JSON list of {"label", "seed", "banks"} cities to include')
     p.add_argument('--noise', action='store_true', help='where the fine noise of cityscape draws comes from')
+    p.add_argument('--replay', type=Path, metavar='FILE',
+                   help="build a study's cities from its rulesets.json instead of drawing them")
     p.add_argument('--noise-draws', type=int, default=200)
     p.add_argument('--noise-renders', type=int, default=6, help='--noise: noisiest and cleanest draws rendered')
     p.add_argument('--min-solid', type=int, default=2000,

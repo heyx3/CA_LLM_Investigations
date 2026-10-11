@@ -29,6 +29,7 @@ from ..analysis.search import Criterion, Pipeline, Stage, Table
 from ..rulesets import (deposition, double_spacetime as dst, hierarchy, initial, lattice_gas as lgca, life,
                         lwd, octaves, triplanar, wolfram)
 from . import cityscape, moore_families
+from .hierarchy_designs import DrawLog
 
 EXPERIMENTS = {}
 
@@ -243,6 +244,15 @@ def _pools():
     return moore_families.load_pools()
 
 
+# Experiments that draw rule sets from the pools take `rulesets`: the records of an
+# earlier run (its 'rulesets' table, saved by scripts/run_experiment.py as
+# NAME.rulesets.json).  Given them, they rerun on exactly those tables instead of
+# drawing; either way they return every rule set they used as a 'rulesets' table.
+
+def _rulesets_table(draws):
+    return Table(draws.records())
+
+
 @experiment
 def layer_contributions(quick=False, log=print):
     """What each layer of the reference cityscape contributes: per-layer statistics of its
@@ -358,7 +368,7 @@ def initial_conditions(quick=False, log=print):
 
 
 @experiment
-def context_plans(quick=False, log=print):
+def context_plans(quick=False, log=print, rulesets=None):
     """The context plan is the central dial: dead / static / complex counts among the
     fine layer's 8 contexts.  Run over several rule draws (seeds), since the spread
     across draws can be as large as the effect of the plan.  The recorded 2 / 4 / 2
@@ -372,8 +382,12 @@ def context_plans(quick=False, log=print):
     _report(log, 'the reference cityscape', reference,
             'density 0.196, pillars 0.46, void 80.2% (the gap is its two rebuilt complex banks)')
 
+    draws = DrawLog(rulesets)
+
     def build(plan, seed):
-        banks = cityscape.draw_banks(cityscape.PLANS[plan], seed, pools=pools)
+        family_plan = cityscape.PLANS[plan]
+        banks = draws.get(f'plan {plan} seed {seed}', lambda: cityscape.draw_banks(family_plan, seed, pools=pools),
+                          cityscape.plan_design(family_plan).slot_families(), plan=plan, seed=seed)
         return cityscape.make(banks, n, ic_seed=seed).run(n).fine
     table = search.sweep(build, {'plan': list(cityscape.PLANS)}, seeds, names, log=None)
     _report(log, 'rule draw 3 from the current pools', table.where(seed=3),
@@ -381,11 +395,11 @@ def context_plans(quick=False, log=print):
     agg = table.aggregate('plan')
     _report(log, f'mean and spread over seeds {seeds}', agg,
             'std across five rule draws was 0.07-0.15 on pillar fraction')
-    return {'reference': reference, 'runs': table, 'by_plan': agg}
+    return {'reference': reference, 'runs': table, 'by_plan': agg, 'rulesets': _rulesets_table(draws)}
 
 
 @experiment
-def plan_search(quick=False, log=print):
+def plan_search(quick=False, log=print, rulesets=None):
     """Target-profile search over context plans: every split of the 8 fine contexts
     into dead / static / complex (in that order), over several rule draws, ranked by
     distance to the cityscape's measured profile.  The template for "find
@@ -398,8 +412,13 @@ def plan_search(quick=False, log=print):
     splits = [(2, 4, 2), (4, 2, 2), (3, 2, 3)] if quick else         [(d, s, 8 - d - s) for d in range(9) for s in range(9 - d)]
     target = search.Target(cityscape.PROFILE)
 
+    draws = DrawLog(rulesets)
+
     def build(split, seed):
-        banks = cityscape.draw_banks(cityscape.plan_of(split), seed, pools=pools)
+        plan = cityscape.plan_of(split)
+        banks = draws.get(f'split {"/".join(map(str, split))} seed {seed}',
+                          lambda: cityscape.draw_banks(plan, seed, pools=pools),
+                          cityscape.plan_design(plan).slot_families(), split=list(split), seed=seed)
         return cityscape.make(banks, n, ic_seed=seed).run(n).fine
     table = search.sweep(build, {'split': splits}, seeds, names, log=None)
     profile = ', '.join(f'{k} {v}' for k, v in cityscape.PROFILE.items())
@@ -408,20 +427,34 @@ def plan_search(quick=False, log=print):
     ranked = table.aggregate('split').rank(target)
     _report(log, f'plans by mean profile over seeds {seeds}', ranked.head(12),
             'more static -> towers; more dead -> sky; more complex -> texture and streaks')
-    return {'runs': table, 'ranked': ranked}
+    return {'runs': table, 'ranked': ranked, 'rulesets': _rulesets_table(draws)}
 
 
-def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77):
+def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77, draws=None, key=None):
     """A hierarchy with the layer scales `divs` for the layer-ablation experiment.
     Draw order (kept fixed so seeds stay comparable): coarse tables coarsest-first from
     rng(seed), the plan from rng(plan_seed), then the coarse states.  Layer i fires at
-    phase min(i, period - 1)."""
+    phase min(i, period - 1).  With a DrawLog, the tables are recorded under `key`
+    with the state the generator is left in, so a replay starts the coarse layers
+    exactly as the draw did."""
     L = len(divs)
     rng = _rng(seed)
-    banks = [None] * L
-    for i in range(L - 1, 0, -1):
-        banks[i] = hierarchy.banks_from_pool(pools['slow'], 2 ** (L - 1 - i), rng)
-    banks[0] = moore_families.draw_plan(plan, _rng(plan_seed), pools)
+
+    def draw():
+        banks = [None] * L
+        for i in range(L - 1, 0, -1):
+            banks[i] = hierarchy.banks_from_pool(pools['slow'], 2 ** (L - 1 - i), rng)
+        banks[0] = moore_families.draw_plan(plan, _rng(plan_seed), pools)
+        return banks
+    if draws is None:
+        banks = draw()
+    else:
+        labels = [list(plan)] + [['slow'] * 2 ** (L - 1 - i) for i in range(1, L)]
+        banks = draws.get(key, draw, labels, seed=seed, plan_seed=plan_seed)
+        if draws.replaying:
+            rng.bit_generator.state = draws.info(key)['states_rng']
+        else:
+            draws.note(key, states_rng=rng.bit_generator.state)
     states = [rng.integers(0, 2, (n // d, n // d)).astype(np.uint8) for d in divs]
     states[0] = initial.blobs(n, _rng(seed))
     layers = [hierarchy.Layer(banks[i], divs[i], divs[i], min(i, divs[i] - 1)) for i in range(L)]
@@ -429,7 +462,7 @@ def _ablation_ca(divs, plan, n, pools, seed=3, plan_seed=77):
 
 
 @experiment
-def layer_ablation(quick=False, log=print):
+def layer_ablation(quick=False, log=print, rulesets=None):
     """Remove one coarse layer and compare.  Confound: three layers
     give the fine layer 4 contexts instead of 8, so the plan changes too (here the
     same 1:2:1 dead/static/complex ratio)."""
@@ -440,13 +473,15 @@ def layer_ablation(quick=False, log=print):
     variants = {'1/2/4/8': ([1, 2, 4, 8], cityscape.PLAN), 'no 4: 1/2/8': ([1, 2, 8], plan4),
                 'no 2: 1/4/8': ([1, 4, 8], plan4), 'no 8: 1/2/4': ([1, 2, 4], plan4)}
     names = ('density', 'pillars', 'streaks', 'void', 'corr_0', 'corr_time', 'parts')
-    table = search.sweep(lambda layers, seed: _ablation_ca(*variants[layers], n, pools, seed).run(n).fine,
+    draws = DrawLog(rulesets)
+    table = search.sweep(lambda layers, seed: _ablation_ca(*variants[layers], n, pools, seed, draws=draws,
+                                                           key=f'{layers} seed {seed}').run(n).fine,
                          {'layers': list(variants)}, seeds, names, log=None)
     agg = table.aggregate('layers')
     _report(log, f'layer ablation, mean over seeds {seeds}', agg,
             'removing a layer also halves the context count: architecture and rule assignment '
             'are confounded')
-    return {'runs': table, 'by_variant': agg}
+    return {'runs': table, 'by_variant': agg, 'rulesets': _rulesets_table(draws)}
 
 
 @experiment

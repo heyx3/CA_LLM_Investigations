@@ -205,3 +205,12 @@ strands (coherence 1.8 vs 3.4), so it was not kept.
 NAME` runs one, and `--all --quick` smoke-tests them all. Each prints its tables with
 the numbers recorded earlier underneath, and writes them to `out/experiments/`. How the
 results compare with the recorded ones is in [docs/REPRODUCTION.md](docs/REPRODUCTION.md).
+
+Rule sets drawn from the family pools change whenever the pools are rebuilt, so every
+study that draws them also records them. The pool-drawing experiments write
+`NAME.rulesets.json` and rerun on it with `--rulesets DIR`; `bank_metrics.py`'s city
+studies write `rulesets.json` and rerun on it with `--replay FILE`; `swap_banks.py`
+writes `banks.json` and takes it back with `--banks FILE`; and design runs of
+`search_hierarchies.py` keep each rule draw's tables in `designs.json`. A specific case
+worth keeping is written into the code as tables (`cityscape.REFERENCE_BANKS`,
+`cityscape.JUDGED_DRAWS`) or saved (`data/saved_rules.json`), never as a seed.

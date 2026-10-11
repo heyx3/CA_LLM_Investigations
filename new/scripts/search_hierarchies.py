@@ -76,7 +76,9 @@ Design labels read `scales | fine plan | coarse families | options`, one letter 
 family (design.FAMILY_CODES).  The cityscape's design is `1.2.4.8 DDSSSSCC www`.
 
 Output (out/hier_search/<tag>/): summary.txt, designs.json (every confirmed design
-with its measures and cluster), runs.csv (one row per run), sheet.png and renders/.
+with its measures, cluster and the tables of each of its rule draws), runs.csv (one row
+per run), sheet.png and renders/.  --show and RUN:ID:DRAWS picks rebuild a design's
+draws from those tables, so they still work after the pools change.
 The instances mode writes instances.json, one sheet per lineage and
 sheet_combinations.png instead.
 """
@@ -129,12 +131,31 @@ def pools_fingerprint(pools):
 
 
 def load_design_run(tag, pools):
-    """designs.json of an earlier design run, warning if it drew from other pools."""
+    """designs.json of an earlier design run, warning if it drew from other pools and
+    did not record its tables (runs made before they were recorded)."""
     data = json.loads((OUT_ROOT / tag / 'designs.json').read_text())
-    if data.get('pools') not in (None, pools_fingerprint(pools)):
-        print(f'warning: {tag} drew its rules from different pools; its designs will not '
-              'rebuild the same tables', flush=True)
+    recorded = all('draws' in d for d in data['designs'].values())
+    if data.get('pools') not in (None, pools_fingerprint(pools)) and not recorded:
+        print(f'warning: {tag} drew its rules from different pools and did not record its '
+              'tables; its designs will not rebuild the same tables', flush=True)
     return data
+
+
+def recorded_draws(design, seeds, pools):
+    """{seed: the rule draw's instance as JSON} for designs.json."""
+    traits = traits_of(pools) if design.limits else None
+    return {str(s): DrawnInstance.draw(design, s, pools, traits).to_json() for s in seeds}
+
+
+def run_instance(data, ident, seed, pools, **extra):
+    """Rule draw `seed` of design `ident` of a design run (its designs.json `data`): from
+    the recorded tables where the run kept them, drawn from the pools otherwise."""
+    entry = data['designs'][ident]
+    if str(seed) in entry.get('draws', {}):
+        inst = Instance.from_json(entry['draws'][str(seed)])
+        return replace(inst, **extra) if extra else inst
+    design = Design.from_json(entry['design'])
+    return Instance.draw(design, seed, pools, traits_of(pools) if design.limits else None, **extra)
 
 
 # ---------------------------------------------------------------- designs
@@ -515,12 +536,10 @@ def resolve_picks(specs, pools):
         if len(parts) == 3:
             run, ident, draws = parts
             data = load_design_run(run, pools)
-            design = Design.from_json(data['designs'][ident]['design'])
             lineage = run.removeprefix('around_') if run.startswith('around_') else ident
             for d in draws.split(','):
                 name = f'{ident}@{d}' if lineage == ident else f'{lineage}.{ident}@{d}'
-                picks.append(Instance.draw(design, int(d), pools, traits_of(pools) if design.limits else None,
-                                           name=name, lineage=lineage))
+                picks.append(run_instance(data, ident, int(d), pools, name=name, lineage=lineage, kind='pick'))
         elif len(parts) == 2:
             data = json.loads((OUT_ROOT / parts[0] / 'instances.json').read_text())
             picks.append(replace(Instance.from_json(data['instances'][parts[1]]['instance']),
@@ -746,8 +765,9 @@ def show(args, pools):
         design = Design.from_json(source['designs'][i]['design'])
         for seed in args.seeds:
             path = out / f'{i}_seed{seed}.png'
-            render_design(design, seed, path, args.res, pools)
-            row = measure_run(build(design, seed, pools), N)
+            inst = run_instance(source, i, seed, pools)
+            render_instance_job((inst, path, args.res))
+            row = measure_run(inst.build(), N)
             entries.append((path, f'{i}  rule draw {seed}', design.label, short(row)))
             print(f'{path.name}: {short(row)}', flush=True)
     contact_sheet(entries, out / 'sheet.png', f'{", ".join(args.show)} over rule draws',
@@ -929,7 +949,8 @@ def main():
         'picks': [{'id': i, 'alike': size, 'shown_seed': shown[i]} for i, size in picks],
         'designs': {i: {'design': c['design'].to_json(), 'label': c['design'].label,
                         'cluster': c['cluster'], 'novelty': c['novelty'], 'reliability': c['reliability'],
-                        'passing_seeds': c['passing_seeds'], 'mean': c['mean'], 'sd': c['sd']}
+                        'passing_seeds': c['passing_seeds'], 'mean': c['mean'], 'sd': c['sd'],
+                        'draws': recorded_draws(c['design'], args.seeds, pools)}
                     for i, c in confirmed.items()}}, indent=1), encoding='utf-8')
 
     if not args.no_render:

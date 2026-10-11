@@ -37,7 +37,11 @@ L0.110 is layer 0's bank where layer 1 = 1, layer 2 = 1 and layer 3 = 0.  The co
 layer has a single bank, L3.
 
 By default the banks are the reference cityscape's (cityscape.REFERENCE_BANKS); with
---seed they are rule draw `seed` of --plan from the family pools.
+--seed they are rule draw `seed` of --plan from the family pools; with --banks FILE they
+are the tables in FILE.  Every run writes the tables it used to banks.json, which
+--banks takes back, so a seeded run can be repeated after the pools have changed:
+
+    python scripts/swap_banks.py --banks out/swaps/seed7-swap/banks.json
 
 Output (default out/swaps/<reference or seed<seed>>-<mode>/): summary.txt, runs.csv (one row per run),
 swaps.csv (means over initial conditions), slots.csv, renders/*.png, and one contact sheet
@@ -47,6 +51,7 @@ import argparse
 import colorsys
 import functools
 import itertools
+import json
 import math
 import os
 import sys
@@ -65,6 +70,7 @@ sys.path.insert(0, str(ROOT))
 from ca3d.analysis import metrics, search                            # noqa: E402
 from ca3d.render3D import sheets                                     # noqa: E402
 from ca3d.render3D.render import Camera, Lighting, render, save_png   # noqa: E402
+from ca3d.rulesets import hierarchy                                   # noqa: E402
 from ca3d.studies import cityscape as city, moore_families            # noqa: E402
 from ca3d.studies.hierarchy_designs import slot_name                  # noqa: E402
 
@@ -162,19 +168,18 @@ def edits_for(slots, mode, pairs=None, kinds=None):
 
 # ---------------------------------------------------------------- running
 
-_CONFIG = {}            # seed, first_start, n, steps, plan, res and the pools, in every process
+_CONFIG = {}            # banks (as text), first_start, n, steps, res, and the tables, in every process
 
 
 def configure(config):
-    _CONFIG.update(config, pools=moore_families.load_pools())
+    _CONFIG.update(config, tables=hierarchy.parse_banks(config['banks']))
 
 
 def build(edit=None, ic_seed=None):
-    """The configured cityscape (the reference, or rule draw `seed` of the plan), with
-    `edit` applied to its banks, started from `ic_seed` (default: the first start)."""
+    """The configured cityscape (its tables as resolved by main), with `edit` applied to
+    its banks, started from `ic_seed` (default: the first start)."""
     c = _CONFIG
-    banks = (city.reference_banks() if c['seed'] is None
-             else city.draw_banks(c['plan'], c['seed'], pools=c['pools']))
+    banks = [layer.copy() for layer in c['tables']]
     if edit is not None:
         edit.apply(banks)
     return city.make(banks, c['n'], ic_seed=c['first_start'] if ic_seed is None else ic_seed)
@@ -340,6 +345,8 @@ def main():
     p.add_argument('--seed', type=int, default=None,
                    help='rule draw of --plan from the families (default: the reference cityscape)')
     p.add_argument('--plan', choices=list(city.PLANS), default='2/4/2')
+    p.add_argument('--banks', type=Path, metavar='FILE',
+                   help="the tables in FILE (an earlier run's banks.json) instead of the reference or a draw")
     p.add_argument('--n', type=int, default=160, help='lattice edge')
     p.add_argument('--steps', type=int, default=None, help='default: n')
     p.add_argument('--ic-seeds', type=int, nargs='+', default=None,
@@ -354,19 +361,33 @@ def main():
     p.add_argument('--out', type=Path, default=None)
     args = p.parse_args()
     args.steps = args.steps or args.n
-    if args.seed is None and args.plan != '2/4/2':
+    if args.seed is None and args.banks is None and args.plan != '2/4/2':
         p.error('the reference cityscape has plan 2/4/2; give --seed to draw rules for another plan')
-    args.rules = 'the reference cityscape' if args.seed is None else f'rule draw {args.seed}'
-    first = 3 if args.seed is None else args.seed
+    if args.banks:
+        recorded = json.loads(args.banks.read_text(encoding='utf-8'))
+        spec = recorded['banks'] if isinstance(recorded, dict) else recorded
+        tables = hierarchy.parse_banks(spec)
+        plan = [bank[0] for bank in spec[0]] if all(isinstance(b, list) and b[0] for b in spec[0]) \
+            else city.PLANS[args.plan]
+        args.rules = f'the tables in {args.banks}'
+        first, label = 3, f'banks-{args.banks.parent.name}'
+    else:
+        plan = city.PLANS[args.plan]
+        tables = (city.reference_banks() if args.seed is None
+                  else city.draw_banks(plan, args.seed, pools=moore_families.load_pools()))
+        args.rules = 'the reference cityscape' if args.seed is None else f'rule draw {args.seed}'
+        first = 3 if args.seed is None else args.seed
+        label = 'reference' if args.seed is None else f'seed{args.seed}'
     ic_seeds = args.ic_seeds or [first + k for k in range(4)]
-    plan = city.PLANS[args.plan]
-    label = 'reference' if args.seed is None else f'seed{args.seed}'
     out = args.out or ROOT / 'out' / 'swaps' / f'{label}-{args.mode}'
     renders = out / 'renders'
     renders.mkdir(parents=True, exist_ok=True)
+    families = city.plan_design(plan, city.SCALES[:len(tables)]).slot_families()
+    banks_text = hierarchy.format_banks(tables, families)
+    (out / 'banks.json').write_text(json.dumps({'rules': args.rules, 'banks': banks_text}, indent=1),
+                                    encoding='utf-8')
 
-    config = dict(seed=args.seed, first_start=ic_seeds[0], n=args.n, steps=args.steps, plan=plan,
-                  res=args.res)
+    config = dict(banks=banks_text, first_start=ic_seeds[0], n=args.n, steps=args.steps, res=args.res)
     configure(config)
     ca = build()
     banks = [layer.rules for layer in ca.layers]
@@ -424,7 +445,7 @@ def main():
     unswapped_mean = next(r for r in means if r['kind'] == 'unswapped')
 
     shares = exposure(build(None, ic_seeds[0]), args.steps)
-    pools = _CONFIG['pools']
+    pools = moore_families.load_pools()        # only to report where each bank sits in its pool
     distinct = []           # one letter per distinct table, in slot order
     for s in slots:
         if not any(np.array_equal(d, bank(s)) for d in distinct):
