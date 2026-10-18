@@ -16,10 +16,13 @@ make the wavefront exhaust itself.
 `bleed` is an optional variant in which the in-plane neighbourhood only sometimes sees
 the adjacent planes.  The noise destroys the fronts, so it is kept only for
 comparison.
+
+The macro/micro hangar is built from post effects (post_effects.majority, dilate, shell).
 """
 import numpy as np
 
 from .lattice import box_sum
+from .post_effects import dilate, majority, shell
 
 FROZEN = 255
 
@@ -83,20 +86,6 @@ def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, bloc
 
 # ---------------------------------------------------------------- macro / micro
 
-def majority(V, radius):
-    """Majority smoothing: holds density near 0.5 and coarsens blobs into chambers
-    (unlike Larger-than-Life growth rules, which saturate)."""
-    return box_sum(V, radius) * 2 > (2 * radius + 1) ** 3
-
-
-def dilate(V, radius):
-    return box_sum(V, radius) > 0
-
-
-def erode(V, radius):
-    return box_sum(V, radius) == (2 * radius + 1) ** 3
-
-
 def macro_chambers(n=96, seed=3, passes=((6, 2), (4, 2))):
     """Random half-full noise smoothed by repeated majority votes: big caverns."""
     V = np.random.default_rng(seed).random((n, n, n)) < 0.5
@@ -110,7 +99,6 @@ def hangar(macro, micro, wall=2, greeble=2):
     """Compose coarse chambers with fine detail:
     shell of the macro solid (chambers stay hollow) + detail inside the solid
     + detail protruding into the chambers just outside the solid."""
-    shell = macro & ~erode(macro, wall)
     fill = macro & micro
     protrusions = dilate(macro, greeble) & ~macro & micro
-    return shell | fill | protrusions
+    return shell(macro, wall) | fill | protrusions

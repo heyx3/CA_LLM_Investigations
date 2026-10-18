@@ -11,7 +11,11 @@ the recipe's default.  Parameters are the configurations that gave the best resu
 Randomised recipes (hierarchy_random, hierarchy_moore, cityscape_twin) record the rule
 tables they drew in scene.info['banks'] and take them back with banks=..., together
 with info['states_rng'] (states_rng=...) where the start states come from the same
-generator, so a render can be repeated whatever the pools hold by then.
+generator, so a render can be repeated whatever the pools hold by then; octave_mix
+records its plan in info['plan'] (plan=...).
+
+`study_scene` builds the studied designs and stored blends by name ('run1:d1839',
+'t0378_ramp', 'mix5:02'), and `build` accepts those names too.
 
 `hierarchy_scene` colours any hierarchy's run (by height, context, smoothed coarse
 layers, or the coarse layers' bits).
@@ -26,7 +30,8 @@ from ..render3D import color
 from ..render3D.render import ColorMode, Scene, cut_if_dense, cut_octant
 from ..rulesets import (deposition, double_spacetime as dst, hierarchy, lattice_gas, life, lwd, octaves,
                         triplanar as tri, wolfram)
-from . import cityscape as city, moore_families, saved
+from . import (cityscape as city, double_spacetime as dst_study, moore_families, octave_mixes, saved,
+               triplanar as tri_study)
 
 SCENES = {}
 
@@ -84,7 +89,50 @@ def triplanar(seed=0, size=None):
     if seed:
         rng = np.random.default_rng(seed)
         rules = [f'{int(rng.integers(0, 2 ** 32)):08x}' for _ in range(3)]
-    return Scene(tri.triplanar(rules, n=size or 96, how='and3', shear_amount=1, init='random'))
+    return Scene(tri.triplanar(rules, n=size or 96, how=tri.AND3, shear_amount=1, init='soup'))
+
+
+@scene
+def triplanar_favourite(seed=0, size=None):
+    """The favourite triplanar variant: t0378's sheets under the combiner tables
+    16 > 12 > 02, thinning with height (studies.triplanar.FAVOURITE).  The seed is unused."""
+    return Scene(cut_if_dense(tri_study.VARIANTS[tri_study.FAVOURITE].build(size or 72)))
+
+
+@scene
+def triplanar_t0378_ramp_majority(seed=0, size=None):
+    """The favourite (t0378_ramp) with a majority vote of radius 1 on every sheet before
+    the combiner: 43 parts at 72^3 (studies.triplanar.SHEET_EFFECT_PICKS).  The seed is unused."""
+    return Scene(cut_if_dense(tri_study.SHEET_EFFECT_PICKS['t0378_ramp_majority'].build(size or 72)))
+
+
+@scene
+def triplanar_t0199_dilated_a(seed=0, size=None):
+    """t0199 with its sheet A dilated by radius 1 before the combiner: density 0.57 at 72^3
+    (studies.triplanar.SHEET_EFFECT_PICKS).  The seed is unused."""
+    return Scene(cut_if_dense(tri_study.SHEET_EFFECT_PICKS['t0199_dilated_a'].build(size or 72)))
+
+
+@scene
+def triplanar_t0199_majority(seed=0, size=None):
+    """t0199 with a majority vote of radius 1 on every sheet before the combiner: density
+    0.20, penetration 0.44 at 72^3 (studies.triplanar.SHEET_EFFECT_PICKS).  The seed is unused."""
+    return Scene(cut_if_dense(tri_study.SHEET_EFFECT_PICKS['t0199_majority'].build(size or 72)))
+
+
+@scene
+def octave_mix(seed=0, size=None, plan=None):
+    """An octave blend on the structure preset (studies.octave_mixes.STRUCTURE): a
+    triplanar variant and a double space-time pick as the two coarsest octaves, any
+    sheet design above, persistence 0.25 / 0.35 / 0.45 by seed % 3.  The plan is recorded
+    in info['plan'] and taken back with plan=...; size scales its levels."""
+    if plan is None:
+        settings = {**octave_mixes.STRUCTURE, 'persistence': (octave_mixes.STRUCTURE['persistence'][seed % 3],)}
+        plan = octave_mixes.mixed_batch(1, np.random.default_rng(seed), favourite_every=None, **settings)[0]
+    else:
+        plan = octave_mixes.Plan.from_json(plan)
+    vol = plan.build(size)
+    return Scene(cut_if_dense(vol), info={'plan': plan.to_json(), 'uncut_density': float(vol.mean())})
 
 
 @scene
@@ -355,6 +403,13 @@ def from_saved(name, seed=None, size=None):
         n = size or settings.get('n', 160)
         ca = entry.build(n, seed)
         return _run_scene(ca, n, colour='height')
+    if entry.kind == 'double_spacetime':
+        design, draw = entry.design()
+        return _cube_scene(design.build(draw if seed is None else seed, size or settings.get('n', 72)))
+    if entry.kind == 'triplanar':
+        return _cube_scene(entry.design().build(size or settings.get('n', 72)))
+    if entry.kind == 'octave_blend':
+        return _cube_scene(entry.plan().build(size))
     if entry.kind == 'wolfram':
         raise ValueError('1D rules make images, not volumes: use scripts/find_rules.py --render')
     assay = entry.assay()
@@ -365,12 +420,45 @@ def from_saved(name, seed=None, size=None):
     return Scene(cut_if_dense(vol), info={'uncut_density': float(vol.mean())})
 
 
+def _cube_scene(vol):
+    return Scene(cut_if_dense(vol), info={'uncut_density': float(vol.mean())})
+
+
+# ---------------------------------------------------------------- studied designs by name
+
+def study_designs():
+    """{name: label} of the studied designs buildable by name: the double space-time
+    designs on the sheets ('run1:d1839'), the triplanar designs and variants
+    ('t0378_ramp').  Stored octave blends are named 'tag:index' (octave_mixes.stored)."""
+    out = {name: design.label for name, (design, _) in dst_study.SHEET_DESIGNS.items()}
+    out.update({name: design.label for name, design in octave_mixes.TRIPLANAR.items()})
+    return out
+
+
+def study_scene(name, seed=None, size=None):
+    """A studied design or stored blend by name: a double space-time design at the draw
+    its sheet showed (or `seed`), slab axis up; a triplanar design; a stored octave plan
+    ('mix5:02'; size scales its levels).  Dense volumes get a corner cut away."""
+    if name in dst_study.SHEET_DESIGNS:
+        design, draw = dst_study.SHEET_DESIGNS[name]
+        return _cube_scene(design.build(draw if seed is None else seed, size or 72))
+    if name in octave_mixes.TRIPLANAR:
+        return _cube_scene(octave_mixes.TRIPLANAR[name].build(size or 72))
+    tag, _, index = name.partition(':')
+    batches = octave_mixes.stored()
+    if tag in batches and index.isdigit() and int(index) < len(batches[tag].plans):
+        return _cube_scene(batches[tag].plans[int(index)].build(size))
+    raise KeyError(f'no scene, saved entry, studied design or stored blend named {name!r}')
+
+
 def build(name, seed=None, size=None):
-    """A named scene or a saved entry, by name."""
+    """A named scene, a saved entry, or a studied design or stored blend, by name."""
     if name in SCENES:
         kw = {'size': size} if seed is None else {'size': size, 'seed': seed}
         return SCENES[name](**kw)
-    return from_saved(name, seed, size)
+    if name in saved.names():
+        return from_saved(name, seed, size)
+    return study_scene(name, seed, size)
 
 
 # ---------------------------------------------------------------- 2D images

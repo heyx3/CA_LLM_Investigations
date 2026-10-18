@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 
 from ca3d.render3D import render
-from ca3d.rulesets import hierarchy, lattice, lattice_gas, life, rules, wolfram
+from ca3d.rulesets import (double_spacetime, hierarchy, lattice, lattice_gas, life, octaves, post_effects, rules,
+                           triplanar, wolfram)
 
 
 # ---------------------------------------------------------------- 1D rules
@@ -12,6 +13,36 @@ def test_rule_bit_orders_round_trip():
     for rule, radius in ((30, 1), (0x360a96f9, 2)):
         for order in ('lsb', 'msb'):
             assert wolfram.rule_number(wolfram.rule_table(rule, radius, order), order) == rule
+
+
+def test_compact_formats_give_known_rules():
+    # radius 1: xor of all three cells and majority are totalistic, xor of the two
+    # neighbours is outer totalistic
+    assert wolfram.rule_number(wolfram.expand([0, 1, 0, 1], 'totalistic', 1)) == 150
+    assert wolfram.rule_number(wolfram.expand([0, 0, 1, 1], 'totalistic', 1)) == 232
+    assert wolfram.rule_number(wolfram.expand([0, 1, 0, 0, 1, 0], 'outer', 1)) == 90
+    for radius in (1, 2, 3):
+        k = 2 * radius + 1
+        assert wolfram.table_size(radius, 'totalistic') == k + 1
+        assert wolfram.table_size(radius, 'outer') == 2 * k
+    assert [wolfram.table_size(r, 'symmetric') for r in (1, 2, 3)] == [6, 20, 72]
+
+
+def test_compact_formats_keep_their_symmetry():
+    rng = np.random.default_rng(3)
+    full = wolfram.expand(rng.integers(0, 2, wolfram.table_size(3, 'symmetric')), 'symmetric', 3)
+    mirror = [int(format(code, '07b')[::-1], 2) for code in range(128)]
+    assert np.array_equal(full, full[mirror])                   # a window and its mirror image agree
+    compact = rng.integers(0, 2, wolfram.table_size(4, 'totalistic'))
+    full = wolfram.expand(compact, 'totalistic', 4)
+    assert all(full[code] == compact[bin(code).count('1')] for code in range(512))
+
+
+def test_compact_rule_numbers_round_trip():
+    for rule, radius, fmt in ((0x2b, 2, 'totalistic'), (0x2fd5, 3, 'outer'), (0x3a5c1, 2, 'symmetric')):
+        assert wolfram.rule_number(wolfram.rule_table(rule, radius, format=fmt)) == rule
+    with pytest.raises(ValueError):
+        wolfram.rule_table(0x40, 2, format='totalistic')        # 7 bits for a 6-entry table
 
 
 def test_rule30_from_single_cell():
@@ -28,6 +59,160 @@ def test_batched_spacetime_matches_individual_runs():
     batch = wolfram.spacetime(inits, tables, 2, 30)
     for i in range(5):
         assert np.array_equal(batch[i], wolfram.spacetime(inits[i], tables[i], 2, 30))
+
+
+def test_double_spacetime_slabs_start_from_the_base_picture():
+    table = wolfram.rule_table('360a96f9', 2)
+    for init in ('cell', 'soup'):
+        G = double_spacetime.base_picture(table, 2, 40, init, init_seed=5)
+        for seed_from, starts in (('rows', G), ('cols', G.T)):
+            raw = double_spacetime.double_spacetime(n=40, mutation='independent', flips=3, init=init, init_seed=5,
+                                                    seed_from=seed_from, up='time')
+            assert np.array_equal(raw[:, :, 0], starts)         # slab i's first step is its seed
+    # the up axis is last: by default the slab axis, so the slabs lie flat
+    raw = double_spacetime.double_spacetime(n=40, up='time')
+    for up, order in (('slab', (1, 2, 0)), ('x', (2, 0, 1)), ('time', (0, 1, 2))):
+        assert np.array_equal(double_spacetime.double_spacetime(n=40, up=up), np.transpose(raw, order))
+    assert np.array_equal(double_spacetime.double_spacetime(n=40), double_spacetime.double_spacetime(n=40, up='slab'))
+
+
+def test_double_spacetime_mutates_in_the_rule_format():
+    # a mirror-symmetric rule stays symmetric under biased mutation, so every slab grown
+    # from one cell is its own mirror image
+    n = 41
+    raw = double_spacetime.double_spacetime('c3a5', 2, n=n, mutation='biased', flips=4, p_one=0.3,
+                                            format='symmetric', up='time')
+    mirror = (2 * (n // 2) - np.arange(n)) % n
+    assert 0 < raw.mean() < 1 and np.array_equal(raw, raw[:, mirror, :])
+
+
+def test_triplanar_combiners_are_truth_tables():
+    for idx in range(8):
+        a, b, c = (idx >> 2) & 1, (idx >> 1) & 1, idx & 1
+        for table, expected in ((triplanar.AND3, a & b & c), (triplanar.MAJ, a + b + c >= 2),
+                                (triplanar.XOR, a ^ b ^ c), (triplanar.EXACT1, a + b + c == 1),
+                                (triplanar.OR3, a | b | c)):
+            assert (table >> idx) & 1 == expected
+    sheets = [triplanar.sheet(r, 2, 40, 'soup', i) for i, r in enumerate(triplanar.DEFAULT_RULES)]
+    # a table that reads only sheet A (output = a) extrudes A along z
+    assert np.array_equal(triplanar.combine(*sheets, how=0xf0), np.repeat(sheets[0][:, :, None].astype(bool), 40, axis=2))
+    for bad in (256, [0x16, -1]):
+        with pytest.raises(ValueError):
+            triplanar.combine(*sheets, how=bad)
+
+
+def test_triplanar_tables_stack_along_z():
+    sheets = [triplanar.sheet(r, 2, 40, 'soup', i) for i, r in enumerate(triplanar.DEFAULT_RULES)]
+    tables = [0x16, 0x12, 0x02]
+    V = triplanar.combine(*sheets, how=tables, shear_amount=1)
+    for layer, table in enumerate(tables):
+        zs = slice(layer * 40 // 3, (layer + 1) * 40 // 3)
+        assert np.array_equal(V[..., zs], triplanar.combine(*sheets, how=table, shear_amount=1)[..., zs])
+
+
+# ---------------------------------------------------------------- octave blending
+
+def soup_volume(size, seed):
+    return np.random.default_rng(seed).random((size,) * 3) < 0.3
+
+
+def test_upsampling_kinds():
+    V = np.random.default_rng(0).random((6, 6, 6)) < 0.5
+    nearest = octaves.upsampled(V, 24, 'nearest')
+    blocks = nearest.reshape(6, 4, 6, 4, 6, 4)                  # every cell a constant 4^3 block
+    assert np.array_equal(blocks.min(axis=(1, 3, 5)), V) and np.array_equal(blocks.max(axis=(1, 3, 5)), V)
+    uneven = octaves.upsampled(V, 20, 'nearest')
+    assert uneven.shape == (20, 20, 20) and set(np.unique(uneven)) <= {0.0, 1.0}
+    soft = octaves.upsampled(V, 24, 'soft', softness=0.3)
+    assert ((soft > 0) & (soft < 1)).any()                      # blurred block edges
+    assert np.array_equal(octaves.upsampled(V, 24, 'soft', softness=0), nearest)
+    assert np.array_equal(octaves.upsampled(V, 24, 'linear'), octaves.upsample_trilinear(V, 24))
+    with pytest.raises(ValueError):
+        octaves.upsampled(V, 24, 'cubic')
+
+
+def test_tie_break_meets_the_density_on_a_plateau():
+    # two binary octaves enlarged to blocks: four distinct field values, so the 0.5
+    # quantile sits on a plateau and the strict threshold keeps far fewer voxels
+    kw = dict(levels=(12, 24), persistence=2, density=0.5, upsample='nearest')
+    assert abs(octaves.octave_blend(soup_volume, **kw).mean() - 0.5) > 0.1
+    assert abs(octaves.octave_blend(soup_volume, tie_break=True, **kw).mean() - 0.5) < 0.01
+
+
+def test_despeckle_removes_loose_solids_and_fills_small_voids():
+    V = np.zeros((20, 20, 20), bool)
+    diagonal = (np.arange(10),) * 3
+    V[diagonal] = True                                          # ten voxels touching only at corners
+    V[15, 3, 3] = True                                          # a loose voxel
+    V[12:18, 12:18, 12:18] = True                               # a solid block ...
+    V[14, 14, 14] = False                                       # ... with a one-voxel hole
+    assert post_effects.despeckle(V) is V
+    solids = post_effects.despeckle(V, solids=2)
+    assert solids[diagonal].all() and not solids[15, 3, 3] and not solids[14, 14, 14]
+    voids = post_effects.despeckle(V, voids=2)
+    assert voids[15, 3, 3] and voids[14, 14, 14] and voids.sum() == V.sum() + 1
+    both = post_effects.despeckle(V, solids=2, voids=2)
+    assert both[diagonal].all() and not both[15, 3, 3] and both[14, 14, 14]
+
+
+def test_box_effects_on_a_block():
+    V = np.zeros((12, 12, 12), bool)
+    V[3:9, 3:9, 3:9] = True                                     # a 6^3 block
+    assert post_effects.dilate(V, 1).sum() == 8 ** 3 and post_effects.erode(V, 1).sum() == 4 ** 3
+    assert post_effects.shell(V, 1).sum() == 6 ** 3 - 4 ** 3
+    assert post_effects.majority(V, 1).sum() == 6 ** 3 - 8 - 12 * 4     # corners and edges are under half solid
+    assert post_effects.erode(np.ones((5, 5), bool), 2).all()  # any dimension; the edges wrap around
+
+
+def test_box_effects_per_axis_and_as_text():
+    V = np.zeros((12, 12, 12), bool)
+    V[3:9, 3:9, 3:9] = True
+    flat = post_effects.dilate(V, (1, 1, 0))                    # within each slice across the last axis
+    assert flat.sum() == 8 * 8 * 6 and post_effects.erode(V, (1, 1, 0)).sum() == 4 * 4 * 6
+    assert np.array_equal(post_effects.apply(V, ['dilate radius=1,1,0']), flat)
+    both = post_effects.apply(V, ['erode radius=1', 'despeckle solids=10 voids=3'])
+    assert np.array_equal(both, post_effects.despeckle(post_effects.erode(V, 1), 10, 3))
+    assert post_effects.apply(V) is V
+    with pytest.raises(ValueError):
+        post_effects.apply(V, ['blur sigma=1'])                  # a field effect
+
+
+def test_field_effects():
+    F = np.full((4, 4, 5), 0.5, np.float32)
+    faded = post_effects.fade(F)
+    assert faded[..., 0].min() == 0.5 and faded[..., -1].max() == 0     # fades out upward
+    assert np.allclose(post_effects.tilt(F, 0.2, -0.2)[0, 0], [0.7, 0.6, 0.5, 0.4, 0.3])
+    assert np.array_equal(post_effects.apply_field(F, ['fade start=1 end=0.5', 'blur sigma=1']),
+                          post_effects.blur(post_effects.fade(F, 1, 0.5), 1))
+    with pytest.raises(ValueError):
+        post_effects.apply_field(F, ['erode radius=1'])          # a volume effect
+
+
+def test_octave_blend_field_hooks():
+    levels = (6, 12, 24)
+    base = octaves.octave_blend(soup_volume, levels, 0.5)
+    assert np.array_equal(octaves.octave_blend(soup_volume, levels, 0.5, fields=lambda f: f, total=lambda f: f), base)
+    # a tilt on the sum keeps the density, and moves the solid down
+    tilted = octaves.octave_blend(soup_volume, levels, 0.5, total=lambda f: post_effects.tilt(f, 0.3, -0.3))
+    assert tilted.mean() == pytest.approx(base.mean(), abs=0.01)
+    assert tilted[..., :12].mean() > base[..., :12].mean() + 0.05
+    # one hook per level: inverting the coarsest field is inverting the coarsest octave
+    inverted = octaves.octave_blend(soup_volume, levels, 0.5, upsample='nearest', fields=[lambda f: 1 - f, None, None])
+    by_build = octaves.octave_blend([lambda n, seed: ~soup_volume(n, seed), soup_volume, soup_volume], levels, 0.5,
+                                    upsample='nearest')
+    assert np.array_equal(inverted, by_build)
+
+
+def test_octave_blend_options_per_level():
+    levels = (6, 12, 24)
+    base = octaves.octave_blend(soup_volume, levels, 0.5)
+    assert np.array_equal(octaves.octave_blend([soup_volume] * 3, levels, 0.5), base)
+    assert np.array_equal(octaves.octave_blend(soup_volume, levels, weights=[1, 0.5, 0.25]), base)
+    mixed = octaves.octave_blend(soup_volume, levels, 0.5, upsample=['soft', 'linear', 'linear'], softness=0.3)
+    assert mixed.shape == (24, 24, 24)
+    for bad in (dict(upsample=['linear'] * 2), dict(weights=[1, 1]), dict(softness=[0.1])):
+        with pytest.raises(ValueError):
+            octaves.octave_blend(soup_volume, levels, 0.5, **bad)
 
 
 def test_set_lambda_hits_target_exactly():

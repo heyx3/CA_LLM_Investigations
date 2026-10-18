@@ -14,7 +14,7 @@ rerun but hard to rerun *identically*; this keeps the results.
 
 Kinds and how `rule` is written:
 
-  wolfram       hex rule number (settings: radius, bit_order)
+  wolfram       hex rule number (settings: radius, bit_order, and format if compact)
   totalistic    B/S notation, 2D life-like ('B4/S2347')
   totalistic3d  B/S notation with ranges ('B11-14/S3-11'), 26-cell box
   moore         the 512-entry table as 128 hex digits (np.packbits order); the entry's
@@ -31,8 +31,19 @@ Kinds and how `rule` is written:
                 rulesets.initial.STARTS) and optional periods and rotation (text, as in
                 studies.hierarchy_designs: 'every20', 'ladder0.05'), started by the 'cityscape'
                 convention.  `build()` makes it; `from_instance` writes one.
+  double_spacetime  no rule string: a studies.double_spacetime.Design as JSON in
+                settings['design'], the draw it was liked at (settings['draw']) and the
+                cube edge (n); `design()` gives (Design, draw), `from_design` writes one
+  triplanar     no rule string: a studies.triplanar.Design as JSON in settings['design'],
+                and n; `design()`, `from_design`
+  octave_blend  no rule string: a studies.octave_mixes.Plan as JSON in settings['plan'];
+                `plan()`, `from_plan`
 
-render3D.scenes.from_saved(name) builds a renderable scene from an entry, and
+The designs and blends already named in the studies (double_spacetime.SHEET_DESIGNS,
+triplanar.SHEET_DESIGNS and VARIANTS, octave_mixes.stored) need no entry: they are built
+by name too.  These kinds are for finds made later.
+
+studies.scenes.from_saved(name) builds a renderable scene from an entry, and
 scripts/render_scene.py accepts saved names as well as scene names.
 """
 import json
@@ -44,7 +55,7 @@ from ..rulesets import rules
 CATALOGUE = Path(__file__).resolve().parents[2] / 'data' / 'saved_rules.json'
 
 RULE_KINDS = ('wolfram', 'totalistic', 'totalistic3d', 'moore')
-KINDS = RULE_KINDS + ('deposition', 'hierarchy')
+KINDS = RULE_KINDS + ('deposition', 'hierarchy', 'double_spacetime', 'triplanar', 'octave_blend')
 
 ASSAY_FIELDS = ('n', 'steps', 'burn', 'p0', 'init', 'seed', 'damage_steps', 'damage_burn',
                 'record_from')
@@ -72,7 +83,8 @@ class Saved:
         from ..analysis import dynamics
         radius = self.settings.get('radius', 1)
         if self.kind == 'wolfram':
-            return dynamics.Wolfram(radius, self.settings.get('bit_order', 'lsb'))
+            return dynamics.Wolfram(radius, self.settings.get('bit_order', 'lsb'),
+                                    self.settings.get('format', 'table'))
         if self.kind == 'totalistic':
             return dynamics.Totalistic(2, radius)
         if self.kind == 'totalistic3d':
@@ -109,6 +121,22 @@ class Saved:
             raise ValueError(f'{self.name} was saved without a design')
         return design.Instance(design.Design.from_json(self.settings['design']), self.banks(),
                                self.settings['ic_seed'])
+
+    def design(self):
+        """A double_spacetime entry's (Design, draw); a triplanar entry's Design."""
+        from . import double_spacetime, triplanar
+        if self.kind == 'double_spacetime':
+            return double_spacetime.Design.from_json(self.settings['design']), self.settings['draw']
+        if self.kind == 'triplanar':
+            return triplanar.Design.from_json(self.settings['design'])
+        raise ValueError(f'{self.name} is a {self.kind} entry, not a double space-time or triplanar design')
+
+    def plan(self):
+        """An octave_blend entry's studies.octave_mixes.Plan."""
+        from . import octave_mixes
+        if self.kind != 'octave_blend':
+            raise ValueError(f'{self.name} is a {self.kind} entry, not an octave blend')
+        return octave_mixes.Plan.from_json(self.settings['plan'])
 
     def build(self, n=None, ic_seed=None):
         """A hierarchy entry as a HierarchicalCA, started as recorded unless `n` or
@@ -182,6 +210,24 @@ def from_instance(name, instance, n, measures=None, found_by='', notes=''):
                  notes or f'design {instance.design.label}')
 
 
+def from_design(name, design, draw=None, n=72, measures=None, found_by='', notes=''):
+    """A Saved entry for a studies.double_spacetime.Design (with the draw it was liked
+    at) or a studies.triplanar.Design, found on n^3 cubes."""
+    from . import double_spacetime
+    kind = 'double_spacetime' if isinstance(design, double_spacetime.Design) else 'triplanar'
+    settings = {'design': design.to_json(), 'n': int(n)}
+    if kind == 'double_spacetime':
+        settings['draw'] = int(draw)
+    measures = {k: round(float(v), 4) for k, v in (measures or {}).items()}
+    return Saved(name, kind, '', settings, measures, found_by, notes or design.label)
+
+
+def from_plan(name, plan, measures=None, found_by='', notes=''):
+    """A Saved entry for a studies.octave_mixes.Plan."""
+    measures = {k: round(float(v), 4) for k, v in (measures or {}).items()}
+    return Saved(name, 'octave_blend', '', {'plan': plan.to_json()}, measures, found_by, notes or plan.label)
+
+
 def from_rule(name, space, table, assay=None, measures=None, found_by='', notes=''):
     """A Saved entry for a rule found by a search in `space`."""
     from ..analysis import dynamics
@@ -197,6 +243,8 @@ def from_rule(name, space, table, assay=None, measures=None, found_by='', notes=
     settings = {k: v for k, v in asdict(assay).items() if v is not None} if assay else {}
     if isinstance(space, dynamics.Wolfram):
         settings.update(radius=space.radius, bit_order=space.bit_order)
+        if space.format != 'table':
+            settings['format'] = space.format
     elif isinstance(space, dynamics.Totalistic) and space.radius != 1:
         settings['radius'] = space.radius
     measures = {k: round(float(v), 4) for k, v in (measures or {}).items()}

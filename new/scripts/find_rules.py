@@ -11,6 +11,8 @@ bands on any measures, print the survivors and optionally render them.
         --damage-burn 20 --band density 0.05 0.4 --band coherence 1.5 - --render 3
     python scripts/find_rules.py --space wolfram --radius 2 --sampler lambda --lam 0.2 0.5 \\
         --band gzip@history 0.3 0.8 --band damage 0.05 0.4
+    python scripts/find_rules.py --space wolfram --format outer --radius 6 --sampler interval \\
+        --band change 0.01 0.25 --band damage 0.05 0.4
     python scripts/find_rules.py ... --keep my_rule      # save the first survivor
 
 Bands apply in the order given (put cheap ones first); '-' leaves an end open, and a
@@ -31,14 +33,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import dynamics, metrics, search                  # noqa: E402
+from ca3d.rulesets import wolfram                                     # noqa: E402
 from ca3d.render3D.render import Scene, cut_if_dense                  # noqa: E402
 from ca3d.studies import saved                                        # noqa: E402
 
-SPACES = {
-    'totalistic': lambda r: dynamics.Totalistic(2, r),
-    'moore': lambda r: dynamics.Moore(),
-    'wolfram': lambda r: dynamics.Wolfram(r),
-    'totalistic3d': lambda r: dynamics.Totalistic(3, r),
+SPACES = {                                  # name -> fn(radius, wolfram table format)
+    'totalistic': lambda r, fmt: dynamics.Totalistic(2, r),
+    'moore': lambda r, fmt: dynamics.Moore(),
+    'wolfram': lambda r, fmt: dynamics.Wolfram(r, format=fmt),
+    'totalistic3d': lambda r, fmt: dynamics.Totalistic(3, r),
 }
 
 
@@ -62,8 +65,9 @@ def candidates(space, args, rng):
     if args.sampler == 'lambda':
         return search.lambda_rules(space, args.count, tuple(args.lam), rng)
     if args.sampler == 'interval':
-        if not isinstance(space, dynamics.Totalistic):
-            raise SystemExit('--sampler interval needs a totalistic space')
+        if not (isinstance(space, dynamics.Totalistic)
+                or isinstance(space, dynamics.Wolfram) and space.format == 'outer'):
+            raise SystemExit('--sampler interval needs a totalistic space, or wolfram --format outer')
         return search.interval_rules(space, args.count, rng)
     if not args.base:
         raise SystemExit('--sampler perturb needs --base RULE [RULE ...]')
@@ -90,6 +94,8 @@ def main():
     p.add_argument('--list-measures', action='store_true')
     p.add_argument('--space', choices=SPACES, default='totalistic')
     p.add_argument('--radius', type=int, default=1, help='neighbourhood radius (wolfram, totalistic)')
+    p.add_argument('--format', choices=wolfram.FORMATS, default='table',
+                   help='wolfram: the rule table format (totalistic, outer, symmetric are compact)')
     p.add_argument('--sampler', choices=('random', 'coin', 'lambda', 'interval', 'perturb'), default='random')
     p.add_argument('--count', type=int, default=2000)
     p.add_argument('--seed', type=int, default=0, help='candidate sampling seed')
@@ -124,7 +130,9 @@ def main():
     if not args.band:
         p.error('give at least one --band NAME LO HI (see --list-measures)')
 
-    space = SPACES[args.space](args.radius)
+    if args.format != 'table' and args.space != 'wolfram':
+        raise SystemExit('--format applies to --space wolfram')
+    space = SPACES[args.space](args.radius, args.format)
     assay = dynamics.Assay(args.n, args.steps, args.burn, args.p0, args.init, args.soup_seed,
                            args.damage_steps, args.damage_burn)
     criteria = []

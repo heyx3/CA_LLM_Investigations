@@ -44,25 +44,26 @@ knowledge of any analysis.
 | module | what it is |
 | --- | --- |
 | `rules.py` | rule-table operators: lambda, flip, biased assign, set/clamp lambda |
-| `wolfram.py` | 1D binary CA of any radius; `lsb`/`msb` rule numbering |
+| `wolfram.py` | 1D binary CA of any radius; `lsb`/`msb` rule numbering; compact table formats (totalistic, outer totalistic, mirror-symmetric) |
 | `life.py` | 2D B/S and 512-entry Moore rules, expansion, rule rotation |
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
 | `lattice.py` | operations on lattices of any dimension: box sums |
-| `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain |
-| `triplanar.py` | three 1D sheets combined on orthogonal planes |
-| `octaves.py` | octave blending of any volume builder |
+| `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain; slab axis up by default (`up=` stands another axis up) |
+| `triplanar.py` | three 1D sheets combined on orthogonal planes by an 8-bit truth table, which may change with height |
+| `octaves.py` | octave blending of any volume builders, one per level if wanted: linear, nearest or soft upsampling, explicit weights, a tie-breaking threshold, and hooks on each octave's enlarged field and on the weighted sum |
 | `lwd.py` | Life without Death birth fields, heightfields, ladders, LWD/GoL hybrid |
 | `lattice_gas.py` | 6-channel lattice-gas diffusion-limited aggregation |
 | `deposition.py` | box sums, frozen-deposition CA (+ bleed), macro/micro hangar |
+| `post_effects.py` | edits to a finished volume, whatever made it: a field thresholded at a density (ties broken by the neighbourhood if asked), despeckling (small solids removed, small voids filled), and box majority, dilate, erode and shell (one radius per axis if wanted); field effects for blends (fade, tilt, blur); all written as text (`'erode radius=1'`) so plans can record them |
 
 **`ca3d/analysis/`**: measuring output and searching for rules.
 
 | module | what it is |
 | --- | --- |
 | `metrics.py` | every measure, for 2D grids and 3D volumes (batched), with a registry of what values read as |
-| `dynamics.py` | rule spaces (1D Wolfram, 2D/3D outer-totalistic, 2D Moore), assays (how a rule is tested), lazily measured trials |
-| `search.py` | bands, criteria, staged pipelines, candidate samplers, target profiles, parameter sweeps, result tables |
+| `dynamics.py` | rule spaces (1D Wolfram in any table format, 2D/3D outer-totalistic, 2D Moore), assays (how a rule is tested), lazily measured trials |
+| `search.py` | bands, criteria, staged pipelines, candidate samplers, target profiles, parameter sweeps, result tables, clustering into kinds (one typical member each) |
 | `banks.py` | rule banks measured on their own: a census of any rule set (every life-like rule, say) from fixed starts, kept as a table and queried by family |
 | `influence.py` | hierarchy coupling tests: pinning, one-cell perturbation, pattern traffic, uniform vs effective parent sensitivity, XOR coupling |
 
@@ -74,6 +75,10 @@ specific to one kind of CA is named after it.
 | `moore_families.py` | families of 512-entry Moore rules (dead, static, complex, edge, slow, erode, grow, drift, frozen, glide), the pools new rules are drawn from, and each pool table's traits (density, spindly, activity) for drawing within slider limits |
 | `hierarchy_designs.py` | hierarchical CAs described by Moore families: a `Design` (which family each bank slot draws from, scales, schedule, rotation, coarse start) and an `Instance` (one rule draw of it: exact tables and start seed), and the two conventions for turning seeds into tables and starts |
 | `cityscape.py` | the reference cityscape (its rule tables and `make`), its `DESIGN`, `draw_banks` for new rule sets in its style, context plans, measured profile, and the bands other hierarchies are judged by |
+| `line_volumes.py` | what the volumes grown from 1D CAs share: the 1D rule and its start (`Sheet`), the random-rule sampler and its screen, and the measures, bands and clustering features cubes are judged by |
+| `double_spacetime.py` | double space-time `Design`s (base rule, rows/columns, mutation, cascade), the survey of random designs, variants, and the designs on the result sheets with the ones picked, by exact settings |
+| `triplanar.py` | triplanar `Design`s (three sheets, combiner tables, shear, post effects on the sheets), the survey, relief over combiner tables and thinning with height, and the designs picked with their variants, by exact settings |
+| `octave_mixes.py` | octave blends of the double space-time and triplanar designs: a `Plan` (the design at each level, the blend's settings, and post effects on single octaves or the whole blend), the pools blends draw from, batch makers, the structure and texture presets, and the blends made so far (`data/octave_plans.json`) |
 | `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
 | `scenes.py` | named, ready-to-render recipes for every construction, scenes for saved rules, and `hierarchy_scene` for colouring any hierarchy's run |
@@ -89,7 +94,10 @@ RGB; `PostFX`'s gamma makes display values at the end.
 
 Scripts: `render_scene.py` and `render_gallery.py` (images; both take saved-rule names),
 `find_rules.py` (rule search from the command line), `run_experiment.py` (the
-experiments; output to `out/experiments/`).
+experiments; output to `out/experiments/`). `search_double_spacetime.py`,
+`search_triplanar.py` and `blend_octaves.py` run the studies of the 1D-grown volumes
+(surveys, variants of liked designs, relief, octave blends) and draw contact sheets,
+into `out/double_spacetime/`, `out/triplanar/` and `out/octaves/`.
 
 ### The hierarchical CA in one paragraph
 

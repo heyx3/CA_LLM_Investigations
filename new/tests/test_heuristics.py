@@ -36,6 +36,19 @@ def test_gzip_relative_to_noise():
     assert metrics.gzip_ratio(slab((64, 64), 32), relative=True) < 0.1
 
 
+def test_compression_ratios():
+    rng = np.random.default_rng(0)
+    png, jpeg = metrics.compression_ratios(rng.random((64, 64)) < 0.5)
+    assert png == pytest.approx(1, abs=0.1) and jpeg == pytest.approx(1, abs=0.1)
+    assert metrics.compression_ratios(slab((64, 64), 32))[0] < 0.1
+    assert set(metrics.measure(rng.random((32, 32)) < 0.5, ['compression'])) == {'png', 'jpeg'}
+    # every z-slice doubled: the z-slices themselves stay noise, the x and y slices compress
+    V = np.random.default_rng(4).random((48, 48, 48)) < 0.5
+    V[:, :, 1::2] = V[:, :, ::2]
+    out = metrics.measure(V, ['compression'])
+    assert out['png2'] > 0.9 and max(out['png0'], out['png1']) < 0.7 and out['png_spread'] > 0.3
+
+
 # ---------------------------------------------------------------- spatial
 
 @pytest.mark.parametrize('shape', [(10, 10), (10, 10, 10)])
@@ -95,6 +108,16 @@ def test_largest_void():
 
 
 # ---------------------------------------------------------------- temporal
+
+def test_penetration():
+    n = 24
+    assert metrics.penetration(np.zeros((n, n, n), bool)) == 1
+    assert metrics.penetration(np.ones((n, n, n), bool)) == 0
+    lower = np.zeros((n, n, n), bool)
+    lower[..., :n // 2] = True
+    # rays down z stop halfway; rays along x and y pass above the half and stop at once below it
+    assert metrics.penetration(lower) == pytest.approx(0.5)
+
 
 def test_temporal_measures():
     still = np.repeat(checkerboard((8, 8))[:, :, None], 32, axis=2)
@@ -198,6 +221,8 @@ def test_tilt_rise_macro():
     half = slab((24, 24, 24), 12)                 # blocks are all-solid or all-empty
     assert metrics.macro_contrast(half) == pytest.approx(1.0)
     assert metrics.macro_contrast(np.ones((24, 24, 24), bool)) == 0
+    noise = np.random.default_rng(0).random((72, 72, 72)) < 0.3   # blocks of 6: noise reads 6^-1.5
+    assert metrics.macro_contrast(noise) == pytest.approx(6 ** -1.5, abs=0.005)
     out = metrics.measure(sliding, ['hair', 'tilt', 'macro', 'rise'])
     assert out['tilt'] == pytest.approx(metrics.tilt(sliding)) and out['rise'] == 0
 
@@ -245,6 +270,21 @@ def test_measure_registry_outputs():
 
 
 # ---------------------------------------------------------------- rule spaces
+
+def test_wolfram_formats_run_as_their_full_tables():
+    rng = np.random.default_rng(5)
+    assay = dynamics.Assay(n=64, steps=40, burn=20, damage_steps=40)
+    for fmt, radius in (('totalistic', 3), ('outer', 4), ('symmetric', 2)):
+        space, full_space = dynamics.Wolfram(radius, format=fmt), dynamics.Wolfram(radius)
+        compact = space.random(8, rng, 0.4)
+        full = wolfram.expand(compact, fmt, radius)
+        a, b = assay.run(space, compact, record=True), assay.run(full_space, full, record=True)
+        assert np.array_equal(a.final, b.final) and np.array_equal(a.history, b.history)
+        assert np.array_equal(a.change, b.change)
+        assert np.array_equal(assay.damage(space, compact), assay.damage(full_space, full))
+        assert all(np.array_equal(space.table(space.describe(t)), t) for t in compact)
+    assert len(dynamics.Wolfram(1, format='totalistic').enumerate()) == 16
+
 
 def test_totalistic_3d_matches_brute_force():
     space = dynamics.Totalistic(ndim=3)
@@ -363,6 +403,20 @@ def test_tables_and_targets():
     assert agg[0]['x'] == 2.0 and agg[0]['x_sd'] == pytest.approx(np.std([1, 2, 3]))
     ranked = agg.rank(search.Target({'x': 9.0}))
     assert ranked[0]['plan'] == 'b' and ranked[0]['distance'] == pytest.approx(1 / 9)
+
+
+def test_spreading_picks_one_of_each_kind():
+    X = np.concatenate([np.random.default_rng(0).normal(0, 0.05, (30, 2)),
+                        np.random.default_rng(1).normal(1, 0.05, (10, 2))])
+    labels, centres = search.kmeans(X, 2, np.random.default_rng(1))
+    picks = search.typical_members(X, labels, centres)
+    assert [size for _, size in picks] == [30, 10] and picks[0][0] < 30 <= picks[1][0]
+    # a row to avoid is replaced by the next most typical member and not counted
+    again = search.typical_members(X, labels, centres, avoid={picks[0][0]})
+    assert again[0][1] == 29 and again[0][0] != picks[0][0] and again[1] == picks[1]
+    rows = [{'a': 3, 'b': -3}, {'a': 1, 'b': -1}, {'a': 2, 'b': -2}]
+    assert np.array_equal(search.percentile_space(rows, ['a', 'b']), [[1, 0], [0, 1], [0.5, 0.5]])
+    assert np.allclose(search.percentile_of({'a': 2.5, 'b': 0}, rows, ['a', 'b']), [2 / 3, 1])
 
 
 # ---------------------------------------------------------------- influence

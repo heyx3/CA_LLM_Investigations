@@ -337,61 +337,21 @@ def screen_and_confirm(designs, ids, seeds, n_screen, pool, log):
     return runs, confirmed
 
 
-def percentile_space(rows, reference=None):
-    """Each feature replaced by its rank among `rows` (0..1), so every measure counts
-    equally whatever its units and tails.  `reference` is placed on the same scale."""
-    X = np.array([[r[k] for k in FEATURES] for r in rows])
-    order = np.sort(X, axis=0)
-    ranks = np.argsort(np.argsort(X, axis=0), axis=0) / max(len(X) - 1, 1)
-    ref = None
-    if reference is not None:
-        ref = np.array([np.searchsorted(order[:, j], reference[k]) / len(X)
-                        for j, k in enumerate(FEATURES)])
-    return ranks, ref
-
-
-def kmeans(X, k, rng, restarts=8, iters=60):
-    """Lloyd's k-means with k-means++ starts; returns (labels, centres) of the best restart."""
-    best = None
-    for _ in range(restarts):
-        centres = [X[rng.integers(len(X))]]
-        for _ in range(1, k):
-            d2 = np.min([((X - c) ** 2).sum(axis=1) for c in centres], axis=0)
-            centres.append(X[rng.choice(len(X), p=d2 / d2.sum())] if d2.sum() else X[rng.integers(len(X))])
-        centres = np.array(centres)
-        for _ in range(iters):
-            labels = ((X[:, None] - centres[None]) ** 2).sum(axis=2).argmin(axis=1)
-            new = np.array([X[labels == j].mean(axis=0) if (labels == j).any() else centres[j]
-                            for j in range(k)])
-            if np.allclose(new, centres):
-                break
-            centres = new
-        inertia = ((X - centres[labels]) ** 2).sum()
-        if best is None or inertia < best[0]:
-            best = (inertia, labels, centres)
-    return best[1], best[2]
-
-
 def spread(confirmed, reference, k, rng, log):
     """Step 4: cluster the confirmed designs and pick each cluster's most typical member.
     Returns picks [(id, cluster size)] (largest cluster first); annotates every design
     with its cluster and its distance from the reference cityscape ("novelty")."""
     ids = list(confirmed)
-    X, ref = percentile_space([confirmed[i]['mean'] for i in ids], reference)
-    k = min(k, len(ids))
-    labels, centres = kmeans(X, k, rng)
+    rows = [confirmed[i]['mean'] for i in ids]
+    X = search.percentile_space(rows, FEATURES)
+    ref = search.percentile_of(reference, rows, FEATURES)
+    labels, centres = search.kmeans(X, min(k, len(ids)), rng)
     for i, x, c in zip(ids, X, labels):
         confirmed[i]['cluster'] = int(c)
         confirmed[i]['novelty'] = float(np.sqrt(((x - ref) ** 2).mean()))
-    picks = []
-    for c in range(k):
-        members = [j for j, lab in enumerate(labels) if lab == c]
-        if len(members) > 1:        # the control is on the sheet already, as the reference
-            members = [j for j in members if ids[j] != 'city']
-        if members:
-            typical = min(members, key=lambda j: ((X[j] - centres[c]) ** 2).sum())
-            picks.append((ids[typical], len(members)))
-    picks.sort(key=lambda p: -p[1])
+    # the control is on the sheet already, as the reference
+    found = search.typical_members(X, labels, centres, avoid={ids.index('city')} if 'city' in ids else ())
+    picks = [(ids[j], size) for j, size in found]
     log(f'spread: {len(ids)} confirmed designs in {len(picks)} clusters; the most typical '
         'member of each is rendered')
     return picks
@@ -575,14 +535,7 @@ def typical_members(names, X, k, rng):
     """k-means over the rows of X; the member nearest each centre, largest cluster first."""
     if len(names) <= k:
         return [(n, 1) for n in names]
-    labels, centres = kmeans(X, k, rng)
-    picks = []
-    for c in range(k):
-        members = np.flatnonzero(labels == c)
-        if len(members):
-            best = members[((X[members] - centres[c]) ** 2).sum(axis=1).argmin()]
-            picks.append((names[best], len(members)))
-    return sorted(picks, key=lambda p: -p[1])
+    return [(names[j], size) for j, size in search.typical_members(X, *search.kmeans(X, k, rng))]
 
 
 def change_kind(inst):
@@ -671,7 +624,7 @@ def explore_instances(args, pools):
                                      'from the parent; shift: RMS change of the measures, in units '
                                      'of their spread over all instances)'))
 
-        X, _ = percentile_space([rows[x.name] for x in kept])
+        X = search.percentile_space([rows[x.name] for x in kept], FEATURES)
         index = {x.name: j for j, x in enumerate(kept)}
         shown = {}
         for p in picks:

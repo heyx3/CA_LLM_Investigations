@@ -35,6 +35,14 @@ read from entry 0 upwards, are the binary digits of 30 (`'lsb'` order). Some sou
 write the table the other way round (`'msb'`), so a rule number is only meaningful with
 its bit order. See `wolfram.rule_table`.
 
+**Compact 1D formats.** A large radius makes the table huge (2^17 entries at radius 8).
+Constraining the rule shrinks it: **totalistic** (only the number of live cells in the
+window matters), **outer totalistic** (the centre cell and the number of live cells
+around it: the 1D version of the B/S rules below) or **mirror-symmetric** (a window and
+its mirror image behave alike). Such a rule is written as its short table, mutated in
+that form so it stays in its format, and expanded to the full table to run. See
+`wolfram.window_map`.
+
 **Life-like ("B/S") rules, outer-totalistic.** The new state depends only on the
 cell's own state and on *how many* of its 8 neighbours are alive (not which ones).
 `B3/S23` (Conway's Game of Life) reads: a dead cell is **B**orn if it has 3 live
@@ -77,6 +85,11 @@ changes extrudes into a **prism**. Several constructions in `rulesets/` build vo
 from 1D CAs (`double_spacetime`, `triplanar`), from Life without Death (`lwd`), or
 directly from 3D rules (`deposition`, `lattice_gas`). Volumes are boolean arrays;
 `render3D/` draws them. Axis conventions are in the `ca3d/__init__.py` docstring.
+
+A **triplanar** volume lays three 1D space-time diagrams on the three planes of a cube;
+each voxel reads one cell from each, and an 8-bit **truth table** (the **combiner**)
+gives its state for each of the 8 patterns those three cells can make
+(`triplanar.combine`). Tables can change with height, so the volume can thin out upward.
 
 ## 5. The hierarchical CA (`rulesets/hierarchy.py`)
 
@@ -171,10 +184,13 @@ returns a number. `metrics.describe_measures()` lists them with what values read
 | entropy | Shannon entropy of the state distribution, bits | 0 uniform, 1 half full |
 | block entropy | entropy of overlapping blocks (2×2 or 2×2×2), per cell | sees arrangement: a checkerboard has entropy 1 but block entropy 0.25 |
 | gzip ratio | compressed size / raw size, relative to the same cells shuffled | ~0 ordered, 1 noise |
+| png / jpeg ratio | slices compressed as images, PNG (lossless) or JPEG (lossy), relative to the same pixels shuffled; per axis for volumes | ~0 ordered, ~1 noise; png sees regularity, jpeg fineness (coarse blocks compress) |
 | compactness | fraction of cells whose whole 3^d neighbourhood equals their own state | 2D: <0.2 speckle, 0.4–0.7 regions with detail, >0.9 blobs |
 | coherence | mean live face-neighbours of a live cell ÷ (2d × density) | 1 = random noise; >2 clustered |
 | components | connected blobs of live cells (face-connected): count, median size, largest share | largest share >0.9: percolating |
 | void | largest connected empty region ÷ array size | high = mostly open space |
+| penetration | how far axis rays get before the first solid voxel ÷ edge | ~0 opaque, 1 empty: how see-through a volume looks, which density does not tell |
+| macro contrast | spread of 12-block densities ÷ a voxel's | 0 even, 1 all-or-nothing blocks; its noise level depends on the volume's size |
 | correlation length | smallest lag where autocorrelation falls below 1/e | 1 = decorrelates after one cell; per axis, so differences show anisotropy |
 | anisotropy | spread of the autocorrelation at lag 3 across axes | zero on average for isotropic rules (a single state shows a little noise) |
 | fractal dimension | slope of log(occupied boxes) vs log(1/box size) | 3D: 3 filling, ~2.5 aggregate, lower wispier |
@@ -215,12 +231,16 @@ slow; partial damage *and* mid density).
 | burn-in | initial steps ignored before measuring |
 | context | the packed parent bits that select a rule bank |
 | DDA | digital differential analyser: the voxel-by-voxel ray walk in `render3D/render.py` |
+| despeckle | remove small loose solid bits from a volume and fill small holes (`post_effects.despeckle`) |
 | heightfield | a surface with one height per (x, y), so no overhangs |
 | lambda | fraction of table entries that output 1 |
 | LWD | Life without Death: Life's B3 birth rule with every live cell surviving |
 | ladder | (LWD) a long thin growth finger; (hierarchy) a rung of the density trigger for rotations |
 | octave | one resolution level of a blend |
 | outer-totalistic | depends on own state and the number of live neighbours |
+| persistence | weight ratio between successive octaves of a blend: below 1 the coarse octaves dominate |
+| post effect | an edit to a finished volume, whatever made it: despeckle, majority, dilate, erode, shell (`post_effects`); a field effect (fade, tilt, blur) edits a blend's float field before its threshold instead; written as text, such as `erode radius=1`, when a plan records it |
 | soup | random initial state |
 | space-time | a CA's history, with time as an extra axis |
+| upsampling | enlarging a coarse octave to full size: linear (smooth), nearest (blocks) or soft (blurred blocks) |
 | voxel | a cell of the 3D grid |

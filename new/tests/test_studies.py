@@ -1,15 +1,17 @@
 """Tests of the studied CAs (ca3d.studies): the Moore-rule families and their pools,
-the cityscape and hierarchy designs, the saved catalogue, the scenes built from them
-and the replayed experiments."""
+the cityscape and hierarchy designs, the double space-time and triplanar designs and
+picks, the saved catalogue, the scenes built from them and the replayed experiments."""
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
 
-from ca3d.analysis import banks, dynamics, search
-from ca3d.rulesets import life
-from ca3d.studies import cityscape, experiments, hierarchy_designs, moore_families, saved, scenes
+from ca3d.analysis import banks, dynamics, metrics, search
+from ca3d.rulesets import life, octaves, post_effects, triplanar
+from ca3d.studies import (cityscape, experiments, hierarchy_designs, line_volumes, moore_families, octave_mixes, saved,
+                          scenes)
+from ca3d.studies import double_spacetime as double_spacetime_study, triplanar as triplanar_study
 
 
 def test_family_pools_hold_members_of_their_family():
@@ -94,6 +96,10 @@ def test_saved_rules_round_trip(tmp_path):
     three = dynamics.Totalistic(ndim=3)
     saved.keep(saved.from_rule('y', three, three.parse('B5-7/S4,6')), path)
     assert saved.names(path) == ['x', 'y'] and saved.get('y', path).rule == 'B5-7/S4,6'
+    outer = dynamics.Wolfram(6, format='outer')                 # a compact 1D rule keeps its format
+    table = outer.random(1, np.random.default_rng(2))[0]
+    saved.keep(saved.from_rule('z', outer, table), path)
+    assert saved.get('z', path).space() == outer and np.array_equal(saved.get('z', path).table(), table)
 
 
 # ---------------------------------------------------------------- designs and instances
@@ -180,9 +186,147 @@ def test_pool_drawing_experiments_replay_their_rulesets(name):
     assert first['runs'].rows == again['runs'].rows
 
 
-@pytest.mark.parametrize('name', ['hierarchy_random', 'hierarchy_moore', 'cityscape_twin'])
+@pytest.mark.parametrize('name', ['hierarchy_random', 'hierarchy_moore', 'cityscape_twin', 'octave_mix'])
 def test_randomised_scenes_rebuild_from_their_tables(name):
     first = scenes.SCENES[name](size=32)
-    given = {k: first.info[k] for k in ('banks', 'states_rng') if k in first.info}
+    given = {k: first.info[k] for k in ('banks', 'states_rng', 'plan') if k in first.info}
     again = scenes.SCENES[name](size=32, **given)
     assert np.array_equal(first.volume, again.volume)
+
+
+# ---------------------------------------------------------------- double space-time and triplanar
+
+def test_double_spacetime_picks_rebuild():
+    # the anchor recorded with the prototypes: run1:d1839 at draw 0, 72^3
+    design, _ = double_spacetime_study.SHEET_DESIGNS['run1:d1839']
+    V = design.build(0, up='time')
+    assert V.mean() == pytest.approx(0.103384, abs=1e-6) and metrics.components(V)[0] == 2559
+    assert set(double_spacetime_study.PICKS) <= set(double_spacetime_study.SHEET_DESIGNS)
+    for design, _ in double_spacetime_study.SHEET_DESIGNS.values():
+        assert double_spacetime_study.Design.from_json(design.to_json()) == design
+
+
+def test_triplanar_picks_and_relief():
+    t0378 = triplanar_study.SHEET_DESIGNS['t0378']
+    m = triplanar_study.measure((t0378, 72))
+    assert m['density'] == pytest.approx(0.404, abs=5e-4) and m['penetration'] == pytest.approx(0.041, abs=5e-4)
+    densities = [s.picture().mean() for s in t0378.sheets]
+    # the favourite is t0378's own table thinned with height, least likely pattern first
+    assert triplanar_study.thinning_path(t0378.tables[0], densities) == triplanar_study.VARIANTS['t0378_ramp'].tables
+    # exact1: one sheet live and the other two empty, summed over the three
+    a, b, c = 0.2, 0.3, 0.4
+    assert triplanar_study.expected_density(triplanar.EXACT1, (a, b, c)) == pytest.approx(
+        a * (1 - b) * (1 - c) + (1 - a) * b * (1 - c) + (1 - a) * (1 - b) * c)
+    old = {'sheets': [{'family': 'table', 'radius': 2, 'rule': '360a96f9', 'init': 'cell', 'init_seed': 0}] * 3,
+           'how': 'maj', 'shear': 1}                             # a prototype's design
+    assert triplanar_study.Design.from_json(old).tables == (triplanar.MAJ,)
+
+
+def test_sampled_designs_pass_the_screen():
+    rng = np.random.default_rng(1)
+    for _ in range(3):
+        d = double_spacetime_study.random_design(rng, 40)
+        assert line_volumes.usable(d.sheet, 40) and d.build(0, 40).shape == (40, 40, 40)
+    # a chaotic rule (ECA 30) fails the screen, and so does a dead one (ECA 0)
+    assert not line_volumes.usable(line_volumes.Sheet('table', 1, '1e'))
+    assert not line_volumes.usable(line_volumes.Sheet('table', 1, '0'))
+
+
+def test_survey_runs_end_to_end():
+    s = double_spacetime_study.survey(8, seed=4, n=32, top=2, jobs=1, log=lambda *a: None)
+    assert set(s['confirmed']) <= set(s['designs']) and {'ctl_walk', 'ctl_biased'} <= set(s['designs'])
+    assert all(len(s['runs'][i]) == 3 for i in s['confirmed'] if not i.startswith('ctl_'))
+
+
+def test_sample_and_confirm():
+    designs = double_spacetime_study.sample(3, seed=1, n=32, jobs=1)
+    assert list(designs) == ['d0000', 'd0001', 'd0002']
+    assert designs['d0001'] == double_spacetime_study.random_design(np.random.default_rng(1_000_004), 32)
+    designs['ctl'] = double_spacetime_study.CONTROLS['walk']
+    runs, confirmed = double_spacetime_study.confirm(designs, n=32, always=('ctl',), jobs=1, log=lambda *a: None)
+    for i, rows in runs.items():       # draw 0 screens; then inside on 2 of 3 draws, unless kept always
+        inside = [not line_volumes.failed_bands(r) for r in rows]
+        assert len(rows) == (3 if i == 'ctl' or inside[0] else 1)
+        assert (i in confirmed) == (i == 'ctl' or sum(inside) >= 2)
+
+
+# ---------------------------------------------------------------- octave mixes
+
+def test_stored_octave_plans_rebuild():
+    batches = octave_mixes.stored()
+    assert sum(len(b.plans) for b in batches.values()) == 130
+    for name, parts in (('oct1:00', 1386), ('struct1_soft:01', 157)):     # linear, and soft upsampling
+        assert metrics.components(octave_mixes.stored_plan(name).build())[0] == parts
+    V = octave_mixes.stored_plan('tex2:00').build()                     # the tie-break meets the density
+    assert V.mean() == 0.5 and metrics.components(V)[0] == 8263
+    for plan in batches['mix5'].plans:
+        assert octave_mixes.Plan.from_json(plan.to_json()) == plan
+
+
+def test_plans_record_post_effects():
+    plan = octave_mixes.stored_plan('oct1:00')
+    first = plan.octaves[0]
+    effected = replace(plan, effects=('despeckle solids=20',),
+                       octaves=(replace(first, effects=('erode radius=1',)),) + plan.octaves[1:])
+    assert octave_mixes.Plan.from_json(json.loads(json.dumps(effected.to_json()))) == effected
+    assert 'effects' not in json.dumps(plan.to_json())             # plans without effects are written as before
+    by_hand = octaves.octave_blend([lambda n, seed: post_effects.erode(first(n), 1), *plan.octaves[1:]], plan.levels,
+                                   plan.persistence, plan.density, upsample=plan.upsample)
+    assert np.array_equal(effected.build(), post_effects.despeckle(by_hand, 20))
+    varied = octave_mixes.vary_level(effected, 0, np.random.default_rng(0))
+    assert varied.octaves[0].name != first.name and varied.octaves[0].effects == ('erode radius=1',)
+
+
+def test_plans_record_field_effects():
+    plan = octave_mixes.stored_plan('oct1:00')
+    effected = replace(plan, field_effects=('tilt start=0.2 end=-0.2',),
+                       octaves=plan.octaves[:-1] + (replace(plan.octaves[-1], field_effects=('fade start=1 end=0',)),))
+    assert octave_mixes.Plan.from_json(json.loads(json.dumps(effected.to_json()))) == effected
+    by_hand = octaves.octave_blend(list(plan.octaves), plan.levels, plan.persistence, plan.density,
+                                   upsample=plan.upsample, fields=[None, None, None, post_effects.fade],
+                                   total=lambda f: post_effects.tilt(f, 0.2, -0.2))
+    assert np.array_equal(effected.build(), by_hand)
+    assert '{fade start=1 end=0}' in effected.label and effected.label.endswith('{tilt start=0.2 end=-0.2}')
+
+
+def test_triplanar_sheet_effects():
+    t0036 = triplanar_study.SHEET_DESIGNS['t0036']
+    thinned = replace(t0036, sheet_effects=(('erode radius=1',), (), ()))
+    a, b, c = t0036.pictures()
+    assert np.array_equal(thinned.build(), triplanar.combine(post_effects.erode(a, 1), b, c, how=list(t0036.tables),
+                                                             shear_amount=t0036.shear))
+    assert triplanar_study.Design.from_json(json.loads(json.dumps(thinned.to_json()))) == thinned
+    assert 'sheet_effects' not in t0036.to_json() and '[erode radius=1]' in thinned.label
+    original, measured = triplanar_study.relief(thinned, 24, most_ones=1, jobs=1)
+    assert all(d.sheet_effects == thinned.sheet_effects for d, _ in measured)
+
+
+def test_octave_batches_follow_their_rules():
+    tri, picks = set(octave_mixes.TRI_POOL), set(octave_mixes.DST_PICKS)
+    for k, plan in enumerate(octave_mixes.mixed_batch(8, np.random.default_rng(1), **octave_mixes.STRUCTURE)):
+        coarse = {o.name for o in plan.octaves[:2]}             # a triplanar variant and a pick, the favourite every 4th
+        assert coarse & tri and coarse & picks and (k % 4 or triplanar_study.FAVOURITE in coarse)
+    for plan in octave_mixes.mixed_batch(4, np.random.default_rng(2), **octave_mixes.TEXTURE):
+        names = {o.name for o in plan.octaves}
+        assert len(plan.octaves) == 2 and names & tri and names & picks
+    for k, plan in enumerate(octave_mixes.sheet_batch(8, np.random.default_rng(3))):
+        assert double_spacetime_study.PICKS[k] in {o.name for o in plan.octaves}
+    plan = octave_mixes.stored_plan('mix5:02')
+    varied = octave_mixes.vary_level(plan, 0, np.random.default_rng(4))
+    assert varied.octaves[1:] == plan.octaves[1:] and varied.octaves[0].name in tri | picks
+
+
+def test_saved_study_kinds_round_trip():
+    design, draw = double_spacetime_study.SHEET_DESIGNS['run2:d2381']
+    ramp, plan = triplanar_study.VARIANTS['t0378_ramp'], octave_mixes.stored_plan('mix5:02')
+    for entry, expected in ((saved.from_design('a', design, draw), (design, draw)),
+                            (saved.from_design('b', ramp), ramp), (saved.from_plan('c', plan), plan)):
+        again = saved.Saved(**json.loads(json.dumps(asdict(entry))))
+        assert (again.plan() if again.kind == 'octave_blend' else again.design()) == expected
+
+
+def test_study_designs_build_by_name():
+    for name in ('run1:d1839', 't0378_ramp', 'oct1:00'):
+        assert scenes.build(name, size=32).volume.shape == (32, 32, 32)
+    with pytest.raises(KeyError):
+        scenes.build('no_such_design')

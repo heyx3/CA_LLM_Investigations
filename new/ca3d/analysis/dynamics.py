@@ -3,7 +3,8 @@
 A RuleSpace steps a *batch* of lattices, each under its own rule table, so thousands
 of candidate rules advance together in one numpy call:
 
-  Wolfram(radius, bit_order)   1D binary rules, 2**(2r+1) entries
+  Wolfram(radius, bit_order,   1D binary rules, 2**(2r+1) entries, or fewer in a
+          format)                compact format (totalistic, outer, symmetric)
   Totalistic(ndim, radius)     outer-totalistic rules on the (2r+1)^d box: life-like
                                2D rules (18 entries, B/S notation) or native 3D rules
                                (54 entries for the 26-cell box)
@@ -49,8 +50,14 @@ class RuleSpace:
     default_n = 96          # lattice edge an Assay uses unless told otherwise
 
     def step(self, states, tables):
-        """states (B, *lattice) with tables (B, size), or one table for every state."""
+        """states (B, *lattice) with tables (B, size), or one table for every state; the
+        tables in the form `runnable` gives them."""
         raise NotImplementedError
+
+    def runnable(self, tables):
+        """The tables in the form `step` runs, made once per run: for most spaces the
+        tables themselves (a compact 1D format expands to the full table)."""
+        return tables
 
     def describe(self, table):
         """Short human-readable name for a table."""
@@ -82,30 +89,38 @@ def _check_listable(size, limit):
 
 @dataclass(frozen=True)
 class Wolfram(RuleSpace):
-    """1D binary rules of the given radius (see rulesets/wolfram.py)."""
+    """1D binary rules of the given radius (see rulesets/wolfram.py), with tables in any
+    of wolfram.FORMATS.  In a compact format the space's tables are the short ones (a
+    radius-8 outer-totalistic rule has 18 entries): samplers, mutations and the
+    'lambda' measure work on them, and each run expands them to full tables once.  An
+    outer-totalistic table is laid out like Totalistic's (own state, then the count of
+    live cells around it), so search.interval_rules samples it too."""
     radius: int = 1
     bit_order: str = 'lsb'
+    format: str = 'table'
     name = 'wolfram'
     ndim = 1
     default_n = 256
 
     @property
     def size(self):
-        return wolfram.table_size(self.radius)
+        return wolfram.table_size(self.radius, self.format)
+
+    def runnable(self, tables):
+        return tables if self.format == 'table' else wolfram.expand(tables, self.format, self.radius)
 
     def step(self, states, tables):
         return wolfram.step(states, tables, self.radius)
 
     def table(self, rule):
-        return wolfram.rule_table(rule, self.radius, self.bit_order)
+        return wolfram.rule_table(rule, self.radius, self.bit_order, self.format)
 
     def describe(self, table):
-        digits = self.size // 4 if self.size >= 4 else 1
-        return f'{wolfram.rule_number(table, self.bit_order):0{digits}x}'
+        return f'{wolfram.rule_number(table, self.bit_order):0{(self.size + 3) // 4}x}'
 
     def enumerate(self, limit=2 ** 20):
         """Every rule of the space, row k being rule number k (radius 1: 256 rules;
-        radius 2 has 2**32)."""
+        radius 2 has 2**32; every totalistic rule of radius 4 is only 2**10)."""
         _check_listable(self.size, limit)
         return np.array([self.table(r) for r in range(2 ** self.size)], np.uint8)
 
@@ -302,6 +317,7 @@ class Assay:
         early, and the results are exactly those of stepping it to the end."""
         tables = np.atleast_2d(tables)
         final = self._start(space, tables)
+        runnable = space.runnable(tables)
         axes = tuple(range(1, final.ndim))
         cells = int(np.prod(final.shape[1:]))
         frames = (np.empty((self.steps - self.record_from,) + final.shape, bool)
@@ -311,7 +327,7 @@ class Assay:
         # the i-th rule still running; `s` (its lattices) and `live_tables` (its rule
         # tables) are aligned with `rows`.  While every rule is still running (`whole`),
         # `frames` and `change` are written for all of them; afterwards, only at `rows`.
-        rows, s, live_tables = np.arange(len(tables)), final, tables
+        rows, s, live_tables = np.arange(len(tables)), final, runnable
         for t in range(self.steps):
             whole = len(rows) == len(tables)
             if record and t >= self.record_from:
@@ -349,16 +365,17 @@ class Assay:
         A rule is dropped from the batch, its answer known, once its two copies are
         equal (the damage has healed for good) or both have reached a fixed point."""
         tables = np.atleast_2d(tables)
+        runnable = space.runnable(tables)
         a = self._start(space, tables)
         for _ in range(self.damage_burn):
-            a = space.step(a, tables)
+            a = space.step(a, runnable)
         b = a.copy()
         middle = self.size(space) // 2
         b[(slice(None),) + (middle,) * space.ndim] ^= 1
         axes = tuple(range(1, a.ndim))
         cells = int(np.prod(a.shape[1:]))
         out = np.zeros(len(tables))
-        rows, live_tables = np.arange(len(tables)), tables
+        rows, live_tables = np.arange(len(tables)), runnable
         for t in range(self.damage_steps):
             a2, b2 = space.step(a, live_tables), space.step(b, live_tables)
             if not _is_check_step(t):

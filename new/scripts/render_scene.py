@@ -1,7 +1,10 @@
-"""Render one named scene, or a saved rule (data/saved_rules.json), to a PNG.
+"""Render one named scene, a saved rule (data/saved_rules.json), or a studied design or
+stored octave blend, to a PNG.
 
     python scripts/render_scene.py cityscape --seed 3 --out out/city.png
     python scripts/render_scene.py tower_field --size 96
+    python scripts/render_scene.py t0378_ramp
+    python scripts/render_scene.py mix5:02 --res 1600
     python scripts/render_scene.py --list
 """
 import argparse
@@ -12,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ca3d.analysis import metrics                     # noqa: E402
-from ca3d.studies import saved, scenes                # noqa: E402
+from ca3d.studies import octave_mixes, saved, scenes  # noqa: E402
 from ca3d.render3D.render import Camera, save_png    # noqa: E402
 
 
@@ -37,6 +40,12 @@ def main():
             rule = entry.rule if len(entry.rule) < 24 else entry.rule[:21] + '...'
             note = entry.notes.split('. ')[0]
             print(f'{name:26} {entry.kind:13} {rule:24} {note[:70]}')
+        print('\nstudied designs (studies.double_spacetime, studies.triplanar):')
+        for name, label in scenes.study_designs().items():
+            print(f'{name:26} {label}')
+        print('\nstored octave blends (studies.octave_mixes), named TAG:INDEX:')
+        for tag, batch in octave_mixes.stored().items():
+            print(f'{f"{tag}:00-{len(batch.plans) - 1:02d}":26} {batch.notes[:90]}')
         return
 
     t0 = time.perf_counter()
@@ -45,7 +54,7 @@ def main():
     image = scene.render(camera=Camera(args.res, args.res, tuple(args.view), zoom=args.zoom))
     t2 = time.perf_counter()
 
-    out = args.out or Path('out') / f'{args.name}.png'
+    out = args.out or Path('out') / f'{args.name.replace(":", "_")}.png'
     out.parent.mkdir(parents=True, exist_ok=True)
     save_png(image, out)
     stats = metrics.summary(scene.volume)

@@ -27,7 +27,7 @@ from ..analysis import dynamics, influence, metrics, search
 from ..analysis.dynamics import Assay
 from ..analysis.search import Criterion, Pipeline, Stage, Table
 from ..rulesets import (deposition, double_spacetime as dst, hierarchy, initial, lattice_gas as lgca, life,
-                        lwd, octaves, triplanar, wolfram)
+                        lwd, octaves, post_effects, triplanar, wolfram)
 from . import cityscape, moore_families
 from .hierarchy_designs import DrawLog
 
@@ -639,8 +639,8 @@ def mutation_strength(quick=False, log=print):
         hexstr, radius, order = wolfram.NAMED_RULES[name]
         for flips in ([1, 4, 8, 12] if radius == 2 else [2, 8, 20, 40]):
             _, A, _ = dst.siblings(hexstr, radius, order, n, n, flips, seed=20)
-            slabs = metrics.slice_density(A, 0)
-            empty, solid = metrics.degenerate_slices(A, 0, solid=0.90)
+            slabs = metrics.slice_density(A, -1)
+            empty, solid = metrics.degenerate_slices(A, -1, solid=0.90)
             t.add({'rule': name, 'flips': flips, 'density': float(A.mean()),
                    'lo': float(slabs.min()), 'hi': float(slabs.max()), 'variety': float(slabs.std()),
                    'dead': empty, 'saturated': solid})
@@ -674,8 +674,8 @@ def double_spacetime_sweep(quick=False, log=print):
                 V, seconds = _timed(lambda: dst.double_spacetime(
                     n=n, mutation='walk' if walk else 'fixed', flips=walk, cascade=cascade,
                     band=band, seed=20))
-                slabs = metrics.slice_density(V, 0)
-                empty, solid = metrics.degenerate_slices(V, 0)
+                slabs = metrics.slice_density(V, -1)
+                empty, solid = metrics.degenerate_slices(V, -1)
                 t.add({'walk': walk, 'cascade': cascade, 'band': band or '-',
                        'density': float(V.mean()), 'coherence': metrics.coherence(V),
                        'slab corr': metrics.series_correlation_length(slabs),
@@ -690,7 +690,7 @@ def double_spacetime_sweep(quick=False, log=print):
     ac = Table()
     for name, kw in modes.items():
         V = dst.double_spacetime(n=n, seed=20, **kw)
-        slabs = metrics.slice_density(V, 0)
+        slabs = metrics.slice_density(V, -1)
         ac.add({'mode': name, 'density': float(V.mean()), 'coherence': metrics.coherence(V),
                 **{f'lag {k}': metrics.series_autocorrelation(slabs, k) for k in (1, 2, 4, 8, 16, 32)
                    if k < n}})
@@ -730,13 +730,14 @@ def triplanar_combiners(quick=False, log=print):
     """Three 1D sheets combined on orthogonal planes.  Cheap, busy,
     and a texture rather than a scene: correlation length ~1 on every axis."""
     n = 32 if quick else 96
-    sheets = [triplanar.sheet(r, 2, n, 'single', i) for i, r in enumerate(triplanar.DEFAULT_RULES)]
+    sheets = [triplanar.sheet(r, 2, n, 'cell', i) for i, r in enumerate(triplanar.DEFAULT_RULES)]
     t = Table()
-    for how in triplanar.COMBINERS:
+    for name, table in (('and3', triplanar.AND3), ('maj', triplanar.MAJ), ('xor', triplanar.XOR),
+                        ('exact1', triplanar.EXACT1), ('or3', triplanar.OR3)):
         for shear in (0, 1):
-            V, seconds = _timed(lambda: triplanar.combine(*sheets, how=how, shear_amount=shear))
+            V, seconds = _timed(lambda: triplanar.combine(*sheets, how=table, shear_amount=shear))
             L = metrics.correlation_lengths(V, 32)
-            t.add({'combine': how, 'shear': shear, 'density': float(V.mean()),
+            t.add({'combine': name, 'shear': shear, 'density': float(V.mean()),
                    'coherence': metrics.coherence(V), 'Lx': int(L[0]), 'Ly': int(L[1]),
                    'Lz': int(L[2]), 'ms': seconds * 1000})
     _report(log, 'tri-planar combiners', t, 'density 0.11, coherence 1.58-2.13, correlation '
@@ -936,7 +937,7 @@ def deposition_sweep(quick=False, log=print):
     m = 32 if quick else 96
     macro = deposition.macro_chambers(m, 3)
     micro = dst.lambda_terrain(n=m, seed=20)
-    shell = macro & ~deposition.erode(macro, 2)
+    shell = post_effects.shell(macro, 2)
     hangar = deposition.hangar(macro, micro)
     chambers = Table()
     for name, V in (('macro', macro), ('wall shell', shell), ('hangar', hangar)):

@@ -14,11 +14,30 @@ A rule *number* is meaningless without its bit-order convention:
   'msb'  the leftmost digit of the 2**k-digit binary string is the output for window
          value 0.  Used for the k=7 rules from the Das et al. synchronisation paper.
 
+A rule may also be written in a compact *format*: constrained to a symmetry, it needs
+fewer numbers, and every window reads one entry of a shorter table:
+
+  'table'       no constraint: one entry per window value (2**k entries)
+  'totalistic'  only how many of the k cells are live matters (k + 1 entries)
+  'outer'       outer totalistic: the centre cell and how many of the other 2r cells are
+                live (2k entries, entry = centre * k + count; the 1D version of B/S rules)
+  'symmetric'   a window and its mirror image share an entry (6 entries at radius 1, 20
+                at 2, 72 at 3)
+
+A compact table is numbered like a full one (`rule_table`, `rule_number`) and `expand`
+turns it into the full table that `step` and `spacetime` take.  Mutating the compact
+table (rules.py) keeps a rule in its format, and a radius-8 outer-totalistic rule is 18
+numbers instead of 131,072.
+
 State arrays have shape (n,) or, for a batch of independent rings, (B, n).
 """
+from functools import lru_cache
+
 import numpy as np
 
 from .rules import apply_table
+
+FORMATS = ('table', 'totalistic', 'outer', 'symmetric')
 
 # Named rules for the examples and experiments: name -> (hex, radius, bit order).
 NAMED_RULES = {
@@ -41,18 +60,52 @@ NAMED_RULES = {
 }
 
 
-def table_size(radius):
-    """Entries in a radius-`radius` rule table: 2 ** (2 * radius + 1)."""
-    return 2 ** (2 * radius + 1)
+def table_size(radius, format='table'):
+    """Entries in a radius-`radius` rule table: 2 ** (2 * radius + 1), or fewer in a
+    compact format (see `window_map`)."""
+    if format == 'table':
+        return 2 ** (2 * radius + 1)
+    return window_map(format, radius)[1]
 
 
-def rule_table(rule, radius=1, bit_order='lsb'):
-    """Rule number (int, or hex string) -> table of 2**(2r+1) output bits."""
+@lru_cache(maxsize=None)
+def window_map(format, radius):
+    """(entry, size): for every window value 0 .. 2**k - 1 (as `window_code` reads it), the
+    entry of a `format` table it reads; and that table's size.  The array is cached and
+    shared, so it is read-only."""
+    k = 2 * radius + 1
+    code = np.arange(2 ** k)
+    live = sum((code >> i) & 1 for i in range(k))
+    if format == 'table':
+        entry, size = code, 2 ** k
+    elif format == 'totalistic':
+        entry, size = live, k + 1
+    elif format == 'outer':
+        centre = (code >> radius) & 1
+        entry, size = centre * k + live - centre, 2 * k
+    elif format == 'symmetric':
+        mirror = sum(((code >> i) & 1) << (k - 1 - i) for i in range(k))
+        pairs, entry = np.unique(np.minimum(code, mirror), return_inverse=True)
+        size = len(pairs)
+    else:
+        raise ValueError(f'format must be one of {FORMATS}, not {format!r}')
+    entry.setflags(write=False)
+    return entry, size
+
+
+def expand(table, format, radius):
+    """Compact table(s) (..., size) -> the full table(s) (..., 2**k) that `step` takes."""
+    return np.asarray(table, np.uint8)[..., window_map(format, radius)[0]]
+
+
+def rule_table(rule, radius=1, bit_order='lsb', format='table'):
+    """Rule number (int, or hex string) -> table of 2**(2r+1) output bits, or the shorter
+    table of a compact `format` (`expand` makes it a full one)."""
     if isinstance(rule, str):
         rule = int(rule, 16)
-    size = table_size(radius)
+    size = table_size(radius, format)
     if not 0 <= rule < 2 ** size:
-        raise ValueError(f'rule {rule:#x} does not fit radius {radius}')
+        raise ValueError(f'rule {rule:#x} does not fit a {size}-entry table (radius {radius}, {format})')
     bits = np.array([(rule >> i) & 1 for i in range(size)], np.uint8)
     if bit_order == 'msb':
         return bits[::-1].copy()

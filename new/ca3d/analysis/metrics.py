@@ -23,9 +23,10 @@ itself shifted by k cells (1 = identical, 0 = unrelated).
 
 Groups:
 
-  occupancy   density, entropy, block_entropy, gzip_ratio
-  spatial     compactness, spindly, coherence, components, largest_void_share, autocorrelation,
-              correlation_length(s), anisotropy, fractal_dimension
+  occupancy   density, entropy, block_entropy, gzip_ratio, compression_ratios (slices as
+              PNG and JPEG images)
+  spatial     compactness, spindly, coherence, components, largest_void_share, penetration,
+              autocorrelation, correlation_length(s), anisotropy, fractal_dimension
   temporal    change_rate, pillar_fraction, overhang_fraction, and correlation_length
               along the time axis (the "temporal correlation length")
   slices      slice_density, series_autocorrelation, series_correlation_length,
@@ -44,11 +45,13 @@ never at an extreme, and should be judged on two independent measures (compact *
 slow, partial damage *and* mid density).  Each measure here has two degenerate ends.
 """
 import gzip
+import io
 import itertools
 from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
+from PIL import Image
 from scipy import ndimage
 
 from ..rulesets.lattice import box_sum
@@ -139,13 +142,69 @@ def gzip_ratio(X, relative=False, seed=0):
     Near 0 is order; the noise ceiling depends on density.  With relative=True the
     ratio is divided by that of the same cells shuffled, so 1.0 means "compresses no
     better than noise" whatever the density.  Conflates spatial and temporal
-    redundancy: a still image and a blinker both compress well."""
+    redundancy: a still image and a blinker both compress well.
+
+    For volumes, `compression_ratios` compresses slices as images instead: its png ratio
+    ranked 800 double space-time cubes almost as this one does (Spearman 0.96) and adds
+    a value per axis; its jpeg ratio (0.82) reads as feature scale.  This one is kept
+    for the experiments that recorded it."""
     raw = np.ascontiguousarray(np.asarray(X, np.uint8))
     ratio = len(gzip.compress(raw.tobytes(), 9)) / raw.size
     if not relative:
         return ratio
     shuffled = np.random.default_rng(seed).permutation(raw.ravel())
     return ratio / (len(gzip.compress(shuffled.tobytes(), 9)) / raw.size)
+
+
+def slice_mosaic(V, axis, slices=12, cols=4):
+    """`slices` evenly spaced slices across `axis` of a volume (at step / 2, step / 2 +
+    step, ..., step = edge // slices), tiled `cols` to a row into one 8-bit image: 0
+    empty, 255 solid."""
+    V = np.asarray(V, bool)
+    count = min(slices, V.shape[axis])
+    step, cols = V.shape[axis] // count, min(cols, count)
+    tiles = [np.take(V, step // 2 + i * step, axis=axis) for i in range(count)]
+    rows = [np.hstack(tiles[k:k + cols]) for k in range(0, len(tiles) - cols + 1, cols)]
+    return (np.vstack(rows) * 255).astype(np.uint8)
+
+
+def _encoded_size(image, fmt):
+    buf = io.BytesIO()
+    if fmt == 'png':
+        Image.fromarray(image).save(buf, 'PNG', compress_level=9)
+    else:
+        Image.fromarray(image).save(buf, 'JPEG', quality=50)
+    return buf.tell()
+
+
+def compression_ratios(X, seed=0):
+    """How well X compresses as images, each relative to the same pixels shuffled: ~0
+    ordered, ~1 noise.  A 2D array is one image; a volume is seen through one
+    `slice_mosaic` per axis.  Returns (png, jpeg), and for a volume also (png_max,
+    png_spread, png0, png1, png2):
+
+      png         lossless: how regular the slices are (hatching, triangles, prisms and
+                  repeated slices all compress); for a volume the mean over its axes
+      jpeg        lossy: how fine they are (coarse blocks compress well, fine lattices
+                  do not); for a volume the mean over its axes
+      png_max     the least regular axis (near 1: one axis is plain noise)
+      png_spread  max - min over the axes: order along some axes only
+      png0..2     each axis
+
+    Slices are compressed together, so slices that repeat or shift along an axis make
+    the other axes' images compress.  Exact values depend a little on the Pillow build
+    (its zlib and libjpeg)."""
+    X = np.asarray(X, bool)
+    if X.ndim not in (2, 3):
+        raise ValueError(f'expected a 2D image or a 3D volume, got shape {X.shape}')
+    images = [(X * 255).astype(np.uint8)] if X.ndim == 2 else [slice_mosaic(X, a) for a in range(3)]
+    rng = np.random.default_rng(seed)
+    ratios = {fmt: [_encoded_size(im, fmt) / _encoded_size(rng.permutation(im.ravel()).reshape(im.shape), fmt)
+                    for im in images] for fmt in ('png', 'jpeg')}
+    png, jpeg = ratios['png'], ratios['jpeg']
+    if X.ndim == 2:
+        return png[0], jpeg[0]
+    return float(np.mean(png)), float(np.mean(jpeg)), max(png), max(png) - min(png), *png
 
 
 # ---------------------------------------------------------------- spatial structure
@@ -232,6 +291,22 @@ def largest_void_share(X):
     High values mean the volume is mostly open space; the cityscape reads 0.80."""
     sizes = component_sizes(~np.asarray(X, bool))
     return float(sizes.max() / np.size(X)) if sizes.size else 0.0
+
+
+def penetration(V):
+    """How far a ray gets into V before its first solid voxel, as a share of the edge,
+    averaged over the rays along every axis (a ray that hits nothing counts 1).  Rays
+    enter from the high-index faces, which the renderer looks at.  This is how see-through
+    a volume looks, which occupancy says little about: random voxels at 10% stop a ray
+    within ~9 cells (0.12 at 72^3), while large empty regions let rays far in at any
+    density.  ~0 opaque, 1 empty."""
+    V = np.asarray(V, bool)
+    depths = []
+    for axis in range(V.ndim):
+        flipped = np.flip(V, axis=axis)
+        first = np.where(flipped.any(axis=axis), flipped.argmax(axis=axis), V.shape[axis])
+        depths.append(first.mean() / V.shape[axis])
+    return float(np.mean(depths))
 
 
 def autocorrelation(X, axis, lag, dims=None):
@@ -559,9 +634,14 @@ def tilt(V, lag=6, reach=6, time_axis=-1):
 
 
 def macro_contrast(V, blocks=12):
-    """Spread of the density of (n / blocks)^3 blocks relative to a single voxel's: ~0
-    when material is spread evenly, larger when it gathers into districts.  V is one
-    (n, n, T) volume."""
+    """Spread of the densities of blocks^3 equal blocks relative to a single voxel's:
+    std(block densities) / sqrt(p (1 - p)), p the overall density.  Its square is the
+    share of the voxel variance that lies between blocks, so this is the volume's
+    low-frequency amplitude: 0 when material is spread evenly at block scale, 1 when
+    every block is all solid or all empty, larger as material gathers into districts.
+    Noise reads b^-1.5 for blocks of b voxels a side (0.068 at 72^3, 0.016 at 192^3), so
+    compare volumes of one size only.  It sees one scale: a pattern whose period divides
+    the block edge reads ~0, one aligned with the blocks 1.  V is one (n, n, T) volume."""
     V = np.asarray(V, bool)
     b = V.shape[0] // blocks
     t = V.shape[-1] // b * b
@@ -674,7 +754,11 @@ MEASURES = {
     'entropy': Measure(entropy, 'cell-state entropy in bits; 0 uniform, 1 half full'),
     'block_entropy': Measure(block_entropy, 'entropy of 2^d blocks per cell; ~0 ordered, ~1 noise'),
     'gzip': Measure(lambda X: gzip_ratio(X, relative=True),
-                    'compressed size vs the same cells shuffled; ~0 ordered, 1 noise', batched=False),
+                    'compressed size vs the same cells shuffled; ~0 ordered, 1 noise; for volumes '
+                    'compression\'s png ranks alike and adds axes', batched=False),
+    'compression': Measure(compression_ratios, 'slices as PNG / JPEG images vs shuffled; ~0 ordered, '
+                           '~1 noise; png regularity (per axis), jpeg fineness', batched=False,
+                           outputs=('png', 'jpeg', 'png_max', 'png_spread', 'png0', 'png1', 'png2')),
     'compactness': Measure(compactness, '<0.2 speckle, 0.4-0.7 regions with detail, >0.9 blobs'),
     'coherence': Measure(coherence, '1.0 noise, >2 clustered; saturates under octave blending'),
     'spindly': Measure(spindly, 'share of live cells with <=1 live neighbour; NaN if empty; '
@@ -683,6 +767,8 @@ MEASURES = {
                           batched=False, outputs=('parts', 'median_part', 'largest_part')),
     'void': Measure(largest_void_share, 'largest empty region / array size (cityscape 0.80)',
                     batched=False),
+    'penetration': Measure(penetration, 'axis rays\' depth before the first solid voxel / edge; '
+                           '~0 opaque, 1 empty; 10% noise 0.12', batched=False),
     'correlation': Measure(correlation_lengths, 'correlation length per axis; 1 = noise',
                            outputs=('corr_0', 'corr_1', 'corr_2')),
     'anisotropy': Measure(anisotropy, 'axis spread of autocorrelation at lag 3; 0 if totalistic'),
@@ -703,8 +789,8 @@ MEASURES = {
                     'over ~0.15 reads as fine noise', batched=False, temporal=True),
     'tilt': Measure(tilt, 'share of solid that arrived by sliding; 0 upright, toward 1 slanted',
                     batched=False, temporal=True),
-    'macro': Measure(macro_contrast, 'block density spread vs a voxel\'s; ~0 even, larger in districts',
-                     batched=False),
+    'macro': Measure(macro_contrast, '12-block density spread vs a voxel\'s; 0 even, 1 all-or-nothing '
+                     'blocks; noise b^-1.5 (0.068 at 72^3): compare one size only', batched=False),
     'rise': Measure(rise, '(last third - first third density) / density; >0 denser with height',
                     batched=False, temporal=True),
 }

@@ -30,6 +30,14 @@ and ranks against a Target profile:
                          seeds=(3, 7, 11), measures=('density', 'pillars', 'void'))
     table.aggregate('plan').rank(search.Target({'density': 0.196, 'pillars': 0.46}))
 
+**Spreading** picks one output of each kind instead of the best ones: rows of measures
+become percentiles (`percentile_space`), k-means groups them, and `typical_members`
+takes the member nearest each centre, largest group first:
+
+    X = search.percentile_space(rows, features)
+    labels, centres = search.kmeans(X, 12, np.random.default_rng(1))
+    picks = search.typical_members(X, labels, centres)
+
 Vocabulary.  A *band* is an interval of a measure's values (e.g. density between
 0.15 and 0.85); a *criterion* is a measure plus a band; a *stage* applies criteria
 under one Assay (how the rules are run); a *pipeline* chains stages.  A *Target* is a
@@ -490,6 +498,60 @@ def _fmt(v):
 
 def _short(x):
     return str(x)[:4] if isinstance(x, str) else _fmt(x)
+
+
+# ---------------------------------------------------------------- one of each kind
+
+def percentile_space(rows, features):
+    """rows (dicts of measures) as an array (len(rows), len(features)): each value replaced
+    by its rank among the rows, 0 to 1, so every feature counts alike whatever its units
+    and tails."""
+    X = np.array([[r[k] for k in features] for r in rows])
+    return np.argsort(np.argsort(X, axis=0), axis=0) / max(len(X) - 1, 1)
+
+
+def percentile_of(row, rows, features):
+    """Where `row` falls among `rows`, feature by feature: the share of rows below it."""
+    X = np.sort(np.array([[r[k] for k in features] for r in rows]), axis=0)
+    return np.array([np.searchsorted(X[:, j], row[k]) / len(X) for j, k in enumerate(features)])
+
+
+def kmeans(X, k, rng, restarts=8, iters=60):
+    """Lloyd's k-means with k-means++ starts; (labels, centres) of the restart whose
+    points lie closest to their centres (least summed squared distance)."""
+    best = None
+    for _ in range(restarts):
+        centres = [X[rng.integers(len(X))]]
+        for _ in range(1, k):
+            d2 = np.min([((X - c) ** 2).sum(axis=1) for c in centres], axis=0)
+            centres.append(X[rng.choice(len(X), p=d2 / d2.sum())] if d2.sum() else X[rng.integers(len(X))])
+        centres = np.array(centres)
+        for _ in range(iters):
+            labels = ((X[:, None] - centres[None]) ** 2).sum(axis=2).argmin(axis=1)
+            new = np.array([X[labels == j].mean(axis=0) if (labels == j).any() else centres[j]
+                            for j in range(k)])
+            if np.allclose(new, centres):
+                break
+            centres = new
+        inertia = ((X - centres[labels]) ** 2).sum()
+        if best is None or inertia < best[0]:
+            best = (inertia, labels, centres)
+    return best[1], best[2]
+
+
+def typical_members(X, labels, centres, avoid=()):
+    """The member of each cluster nearest its centre, as [(row, cluster size)], largest
+    cluster first.  Rows in `avoid` (a control, a reference) are taken only when alone
+    in their cluster, and otherwise not counted; empty clusters are skipped."""
+    picks = []
+    for c in range(len(centres)):
+        members = [int(j) for j in np.flatnonzero(labels == c)]
+        if len(members) > 1:
+            members = [j for j in members if j not in avoid]
+        if members:
+            nearest = min(members, key=lambda j: ((X[j] - centres[c]) ** 2).sum())
+            picks.append((nearest, len(members)))
+    return sorted(picks, key=lambda p: -p[1])
 
 
 def sweep(build, grid=None, seeds=(0,), measures=('density', 'coherence', 'components'),
