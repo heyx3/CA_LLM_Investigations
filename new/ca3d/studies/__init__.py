@@ -16,6 +16,9 @@ of CA is named after it.
                      the designs picked
   octave_mixes       octave blends of those designs: plans, pools, the structure and
                      texture presets, and the blends made so far
+  deposition_shells  frozen deposition chosen and coloured by freeze time (Pick), the
+                     shell searches and the configurations picked, and shapes for
+                     structured starts
   saved              a catalogue of rules and configurations worth keeping
   experiments        named, re-runnable experiments, each asking one question
   scenes             named, ready-to-render recipes for every construction (and saved

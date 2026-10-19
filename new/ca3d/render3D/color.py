@@ -8,6 +8,10 @@ from scipy import ndimage
 # Default height ramp: slate blue at the bottom, amber at the top.  A ramp is a list of
 # (position in [0, 1], (r, g, b) with channels in [0, 1]) stops.
 DEFAULT_RAMP = [(0.0, (0.30, 0.42, 0.72)), (1.0, (0.95, 0.62, 0.26))]
+# For times and ages, kept distinct from the height ramp: dark purple (earliest), blue,
+# green, yellow (latest).
+TIME_RAMP = [(0.0, (0.06, 0.02, 0.20)), (0.35, (0.05, 0.25, 0.45)), (0.65, (0.10, 0.60, 0.35)),
+             (1.0, (0.95, 0.80, 0.05))]
 
 
 def ramp(values, stops=DEFAULT_RAMP):

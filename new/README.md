@@ -54,7 +54,7 @@ knowledge of any analysis.
 | `octaves.py` | octave blending of any volume builders, one per level if wanted: linear, nearest or soft upsampling, explicit weights, a tie-breaking threshold, and hooks on each octave's enlarged field and on the weighted sum |
 | `lwd.py` | Life without Death birth fields, heightfields, ladders, LWD/GoL hybrid |
 | `lattice_gas.py` | 6-channel lattice-gas diffusion-limited aggregation |
-| `deposition.py` | box sums, frozen-deposition CA (+ bleed), macro/micro hangar |
+| `deposition.py` | box sums, frozen-deposition CA (+ bleed, + separate freezing and blocking boxes, + structured starts on a schedule, containers, obstacles and a non-wrapping cube, + each cell's freeze time, with selection of the solid by freeze time), macro/micro hangar |
 | `post_effects.py` | edits to a finished volume, whatever made it: a field thresholded at a density (ties broken by the neighbourhood if asked), despeckling (small solids removed, small voids filled), and box majority, dilate, erode and shell (one radius per axis if wanted); field effects for blends (fade, tilt, blur); all written as text (`'erode radius=1'`) so plans can record them |
 
 **`ca3d/analysis/`**: measuring output and searching for rules.
@@ -78,6 +78,7 @@ specific to one kind of CA is named after it.
 | `line_volumes.py` | what the volumes grown from 1D CAs share: the 1D rule and its start (`Sheet`), the random-rule sampler and its screen, and the measures, bands and clustering features cubes are judged by |
 | `double_spacetime.py` | double space-time `Design`s (base rule, rows/columns, mutation, cascade), the survey of random designs, variants, and the designs on the result sheets with the ones picked, by exact settings |
 | `triplanar.py` | triplanar `Design`s (three sheets, combiner tables, shear, post effects on the sheets), the survey, relief over combiner tables and thinning with height, and the designs picked with their variants, by exact settings |
+| `deposition_shells.py` | frozen deposition chosen and coloured by when each cell froze: a `Pick` (the run, the selection of its solid by freeze time, the colouring; also an octave builder), `match` (retries over seeds and seedings, keeping the run closest to target solid / parts / largest share, so picks keep their look at other sizes) and the configurations picked from the freeze-time renders and the shell searches, by exact settings; built by name like the other studied designs; shapes and layouts for structured starts (balls, planes, rods, tubes, spheres, tori, cube faces and edges, lattices, rings, helices, sparse lighting, staggered schedules), a size-independent `Start` a pick can carry, and the structured-start picks (`STARTED`, scenes `deposition_start*`) |
 | `octave_mixes.py` | octave blends of the double space-time and triplanar designs: a `Plan` (the design at each level, the blend's settings, and post effects on single octaves or the whole blend), the pools blends draw from, batch makers, the structure and texture presets, and the blends made so far (`data/octave_plans.json`) |
 | `saved.py` | the catalogue of rules and configurations worth keeping (`data/saved_rules.json`) |
 | `experiments.py` | named experiments, each asking one question, printed beside the numbers recorded earlier |
@@ -98,6 +99,9 @@ experiments; output to `out/experiments/`). `search_double_spacetime.py`,
 `search_triplanar.py` and `blend_octaves.py` run the studies of the 1D-grown volumes
 (surveys, variants of liked designs, relief, octave blends) and draw contact sheets,
 into `out/double_spacetime/`, `out/triplanar/` and `out/octaves/`.
+`search_deposition_shells.py` runs the deposition shell searches (separate nested
+cages, or shells filling the cube), draws their sheets into `out/deposition_shells/`,
+and prints the samples you name as entries for `deposition_shells.PICKS`.
 
 ### The hierarchical CA in one paragraph
 

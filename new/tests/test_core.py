@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 
 from ca3d.render3D import render
-from ca3d.rulesets import (double_spacetime, hierarchy, lattice, lattice_gas, life, octaves, post_effects, rules,
-                           triplanar, wolfram)
+from ca3d.rulesets import (deposition, double_spacetime, hierarchy, lattice, lattice_gas, life, octaves,
+                           post_effects, rules, triplanar, wolfram)
 
 
 # ---------------------------------------------------------------- 1D rules
@@ -374,6 +374,21 @@ def test_box_sum_matches_brute_force():
     padded = np.pad(V, 2)
     inside = sum(np.roll(padded, (a, b), axis=(0, 1)) for a in range(-1, 2) for b in range(-2, 3))
     assert np.array_equal(lattice.box_sum(V, radii, wrap=False), inside[2:-2, 2:-2, 2:-2])
+
+
+def test_shell_lists_split_the_deposit():
+    x, y, z = np.indices((48, 48, 48))
+    ball = (x - 24) ** 2 + (y - 24) ** 2 + (z - 24) ** 2 <= 9      # a sparsely lit ball: one start that grows
+    start = ball & (np.random.default_rng(0).random(ball.shape) < 0.1)
+    times = deposition.frozen_deposition(n=48, start=start, freeze_times=True)[3]
+    number = deposition.shell_numbers(times)
+    count = int(number.max()) + 1
+    assert number.min() == -1 and count > 3
+    halves = [deposition.by_freeze_time(times, shells=range(k, count, 2)) for k in (0, 1)]
+    assert not (halves[0] & halves[1]).any() and np.array_equal(halves[0] | halves[1], times >= 0)
+    assert np.array_equal(deposition.by_freeze_time(times, shells=[-1]), number == count - 1)
+    first = int(times[times >= 0].min())   # shells 0, 2, ... are every other shell counted from the first
+    assert np.array_equal(halves[0], deposition.by_freeze_time(times, period=4, keep=2, phase=first))
 
 
 def test_lattice_gas_stream_and_bounce_conserve_particles():

@@ -30,8 +30,8 @@ from ..render3D import color
 from ..render3D.render import ColorMode, Scene, cut_if_dense, cut_octant
 from ..rulesets import (deposition, double_spacetime as dst, hierarchy, lattice_gas, life, lwd, octaves,
                         triplanar as tri, wolfram)
-from . import (cityscape as city, double_spacetime as dst_study, moore_families, octave_mixes, saved,
-               triplanar as tri_study)
+from . import (cityscape as city, deposition_shells as shells, double_spacetime as dst_study,
+               moore_families, octave_mixes, saved, triplanar as tri_study)
 
 SCENES = {}
 
@@ -206,6 +206,53 @@ def frozen_deposition(seed=1, size=None):
     The reference run (density 0.101, coherence 4.17, 3,434 parts at 96^3)."""
     st, steps, why = deposition.frozen_deposition(n=size or 96, seed=seed)
     return Scene(st == deposition.FROZEN, info={'steps': steps, 'stop': why})
+
+
+def _shells_scene(pick, seed=None, size=None):
+    """A deposition_shells.Pick coloured by freeze time; `seed` and `size` replace its own."""
+    solid, shade, info = pick.build(seed, size)
+    return Scene(solid, ColorMode.field(shade, color.TIME_RAMP), info=info)
+
+
+def _deposition_by_time(seed, size, **select):
+    """The reference run's solid chosen by freeze time (deposition.by_freeze_time),
+    coloured by freeze time scaled linearly over what is kept."""
+    return _shells_scene(shells.Pick(select=select, colour='time'), seed, size or 96)
+
+
+@scene
+def frozen_deposition_age(seed=1, size=None):
+    """The reference run coloured by when each voxel froze (purple first, yellow last):
+    the starting points and the order in which the waves laid their shells down."""
+    return _deposition_by_time(seed, size)
+
+
+@scene
+def frozen_deposition_shells(seed=1, size=None):
+    """Every other shell of the reference run (freeze steps 0-1 of every 4), coloured by
+    freeze time: the rings open up into hollow nested cages."""
+    return _deposition_by_time(seed, size, period=4, keep=2)
+
+
+@scene
+def deposition_b10_22_third_shells(seed=None, size=None):
+    """Birth window 10-22, denser seeding; every third shell, coloured by freeze order:
+    solid 0.035, 884 parts at 96^3 (studies.deposition_shells.PICKS)."""
+    return _shells_scene(shells.PICKS['b10_22_third_shells'], seed, size)
+
+
+def _started_scene(name):
+    """Register deposition_<name>: a structured-start pick (deposition_shells.STARTED),
+    built at any size; the seed draws the start's sparse lighting."""
+    def build(seed=None, size=None):
+        return _shells_scene(shells.PICKS[name], seed, size)
+    build.__name__ = f'deposition_{name}'
+    build.__doc__ = f'{shells.PICKS[name].label} (studies.deposition_shells.STARTED).'
+    return scene(build)
+
+
+for _name in shells.STARTED:
+    _started_scene(_name)
 
 
 @scene
@@ -429,16 +476,21 @@ def _cube_scene(vol):
 def study_designs():
     """{name: label} of the studied designs buildable by name: the double space-time
     designs on the sheets ('run1:d1839'), the triplanar designs and variants
-    ('t0378_ramp').  Stored octave blends are named 'tag:index' (octave_mixes.stored)."""
+    ('t0378_ramp'), the deposition picks ('search1_1534').  Stored octave blends are
+    named 'tag:index' (octave_mixes.stored)."""
     out = {name: design.label for name, (design, _) in dst_study.SHEET_DESIGNS.items()}
     out.update({name: design.label for name, design in octave_mixes.TRIPLANAR.items()})
+    out.update({name: pick.label for name, pick in shells.PICKS.items()})
     return out
 
 
 def study_scene(name, seed=None, size=None):
     """A studied design or stored blend by name: a double space-time design at the draw
-    its sheet showed (or `seed`), slab axis up; a triplanar design; a stored octave plan
-    ('mix5:02'; size scales its levels).  Dense volumes get a corner cut away."""
+    its sheet showed (or `seed`), slab axis up; a triplanar design; a deposition pick
+    coloured by freeze time; a stored octave plan ('mix5:02'; size scales its levels).
+    Dense volumes get a corner cut away."""
+    if name in shells.PICKS:
+        return _shells_scene(shells.PICKS[name], seed, size)
     if name in dst_study.SHEET_DESIGNS:
         design, draw = dst_study.SHEET_DESIGNS[name]
         return _cube_scene(design.build(draw if seed is None else seed, size or 72))
