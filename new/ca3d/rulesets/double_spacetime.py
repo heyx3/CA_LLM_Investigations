@@ -29,6 +29,10 @@ The interesting part is how slab i's rule relates to the base rule (`rule_sequen
                  that ramps linearly from lam_start to lam_end.  Stood upright this is
                  a stratified terrain.
 
+Every 1D run (the base and the slabs) wraps around its ring unless a `boundary` is
+given (boundaries.py): then the ends of the line read the boundary's values, step by
+step.  From an empty base ('empty' start) the boundary alone draws the picture.
+
 The base rule may be in a compact format (see wolfram.py).  The slab rules are then
 mutated as compact tables, so they stay in that format, and expanded to run.
 
@@ -59,17 +63,20 @@ def stand(raw, up='slab'):
     return np.transpose(raw, UP[up])
 
 
-def base_picture(table, radius, n, init='cell', init_seed=0):
+def base_picture(table, radius, n, init='cell', init_seed=0, boundary='wrap'):
     """The base run's n x n space-time diagram (row i: the ring at time i) under the full
-    rule `table`, from one live cell in the middle ('cell') or from a random soup with
-    each cell live with probability 0.5 ('soup', drawn with init_seed)."""
+    rule `table`, from one live cell in the middle ('cell'), from a random soup with
+    each cell live with probability 0.5 ('soup', drawn with init_seed), or from nothing
+    ('empty': only a boundary can start anything)."""
     if init == 'cell':
         start = wolfram.single_cell(n)
     elif init == 'soup':
         start = wolfram.random_state(n, np.random.default_rng(init_seed))
+    elif init == 'empty':
+        start = np.zeros(n, np.uint8)
     else:
-        raise ValueError(f"init must be 'cell' or 'soup', not {init!r}")
-    return wolfram.spacetime(start, table, radius, n)
+        raise ValueError(f"init must be 'cell', 'soup' or 'empty', not {init!r}")
+    return wolfram.spacetime(start, table, radius, n, boundary)
 
 
 def rule_sequence(base, count, mode, rng, flips=1, p_one=0.05, band=None,
@@ -100,8 +107,9 @@ def rule_sequence(base, count, mode, rng, flips=1, p_one=0.05, band=None,
     raise ValueError(f'unknown mutation mode {mode!r}')
 
 
-def extrude(rows, rules, radius, steps, cascade=0.0, rng=None):
-    """Grow one sheet per seed row (rows (S, n)), slab i using rules[i].
+def extrude(rows, rules, radius, steps, cascade=0.0, rng=None, boundary='wrap'):
+    """Grow one sheet per seed row (rows (S, n)), slab i using rules[i], every slab
+    under the same `boundary`.
 
     Returns the raw stack, bool (S, n, steps).  Without cascade all slabs run as one
     batch.
@@ -109,7 +117,7 @@ def extrude(rows, rules, radius, steps, cascade=0.0, rng=None):
     rows = np.asarray(rows, np.uint8)
     rules = np.asarray(rules, np.uint8)
     if cascade <= 0:
-        sheets = wolfram.spacetime(rows, rules, radius, steps)      # (S, steps, n)
+        sheets = wolfram.spacetime(rows, rules, radius, steps, boundary)      # (S, steps, n)
         return np.transpose(sheets, (0, 2, 1)).astype(bool)
     vol = np.empty((len(rows), rows.shape[1], steps), bool)
     previous_last_row = None
@@ -117,7 +125,7 @@ def extrude(rows, rules, radius, steps, cascade=0.0, rng=None):
         if previous_last_row is not None:
             take = rng.random(seed_row.size) < cascade
             seed_row = np.where(take, previous_last_row, seed_row).astype(np.uint8)
-        sheet = wolfram.spacetime(seed_row, rule, radius, steps)
+        sheet = wolfram.spacetime(seed_row, rule, radius, steps, boundary)
         vol[i] = sheet.T
         previous_last_row = sheet[-1]
     return vol
@@ -139,28 +147,30 @@ def xor_mutants(rule, radius, bit_order, count, flips, rng):
 
 
 def siblings(rule='360a96f9', radius=2, bit_order='lsb', n=96, depth=None, flips=4, seed=20,
-             up='slab'):
+             up='slab', boundary='wrap'):
     """Two double space-times sharing one base grid G and one set of independently
     mutated rules (`xor_mutants`).  Sibling A seeds slab i with row i of G (G's state at
     time i), sibling B with column i (cell i's history).  Returns (G, A, B): A and B are
     bool stacks of n slabs, n cells and `depth` steps, with the `up` axis last."""
     depth = n if depth is None else depth
     base = wolfram.rule_table(rule, radius, bit_order)
-    G = wolfram.spacetime(wolfram.single_cell(n), base, radius, n)
+    G = wolfram.spacetime(wolfram.single_cell(n), base, radius, n, boundary)
     rules = xor_mutants(rule, radius, bit_order, n, flips, np.random.default_rng(seed))
-    return G, stand(extrude(G, rules, radius, depth), up), stand(extrude(G.T, rules, radius, depth), up)
+    return (G, stand(extrude(G, rules, radius, depth, boundary=boundary), up),
+            stand(extrude(G.T, rules, radius, depth, boundary=boundary), up))
 
 
 def double_spacetime(rule='360a96f9', radius=2, bit_order='lsb', n=96, mutation='walk',
                      flips=1, cascade=0.0, seed=20, format='table', init='cell', init_seed=0,
-                     seed_from='rows', up='slab', **sequence_kw):
+                     seed_from='rows', up='slab', boundary='wrap', **sequence_kw):
     """The whole construction; returns bool (n, n, n) with the `up` axis last: by default
     [x, time, slab], the slabs lying flat (see UP).
 
     rule, radius, bit_order  the base 1D rule (see wolfram.py)
     format                   its table format (wolfram.FORMATS); the slab rules are
                              mutated in that format
-    init, init_seed          the base run's start: one live cell or a soup (base_picture)
+    init, init_seed          the base run's start: one live cell, a soup or nothing
+                             (base_picture)
     seed_from                'rows': slab i starts from row i of the base picture (the
                              ring at time i); 'cols': from column i (cell i's history)
     mutation                 how slab rules derive from it (see the module docstring)
@@ -168,16 +178,17 @@ def double_spacetime(rule='360a96f9', radius=2, bit_order='lsb', n=96, mutation=
     cascade                  probability a slab is seeded from the previous slab's end
     seed                     the random draw: the mutations and the cascade
     up                       the axis standing up as z: 'slab', 'x' or 'time' (UP)
+    boundary                 the ends of every 1D run (boundaries.py); default a ring
     sequence_kw              extra arguments for `rule_sequence` (p_one, band, ...)
     """
     if seed_from not in ('rows', 'cols'):
         raise ValueError(f"seed_from must be 'rows' or 'cols', not {seed_from!r}")
     rng = np.random.default_rng(seed)
     base = wolfram.rule_table(rule, radius, bit_order, format)
-    G = base_picture(wolfram.expand(base, format, radius), radius, n, init, init_seed)
+    G = base_picture(wolfram.expand(base, format, radius), radius, n, init, init_seed, boundary)
     rows = G if seed_from == 'rows' else G.T
     rules = rule_sequence(base, n, mutation, rng, flips=flips, **sequence_kw)
-    raw = extrude(rows, wolfram.expand(rules, format, radius), radius, n, cascade, rng)
+    raw = extrude(rows, wolfram.expand(rules, format, radius), radius, n, cascade, rng, boundary)
     return stand(raw, up)
 
 

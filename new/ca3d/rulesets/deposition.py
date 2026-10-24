@@ -26,6 +26,10 @@ growth to a container, `obstacles` are solid from the start (blocking shapes wha
 near them), and wrap=False stops the cube from wrapping around.  The shape helpers are
 in studies/deposition_shells.py.
 
+`boundary` (boundaries.py) says in states what lies beyond the cube's faces, instead of
+`wrap`: Constant(1) is a wall of live cells (it ignites what is near it, every step),
+Constant(FROZEN) a frozen wall (it blocks), a Pattern either, in any layout.
+
 With freeze_times=True the run also returns the step at which each cell froze.  The
 waves deposit one shell every other step, so selecting the solid by freeze time
 (`by_freeze_time`) peels the shells apart: early, middle or late deposits, every
@@ -40,29 +44,37 @@ The macro/micro hangar is built from post effects (post_effects.majority, dilate
 """
 import numpy as np
 
+from .boundaries import interior, pad
 from .lattice import box_sum
 from .post_effects import dilate, majority, shell
 
 FROZEN = 255
 
 
-def _neighbour_counts(field, radii, bleed_p, bleed_axis, rng, wrap=True):
+def _neighbour_counts(field, radii, bleed_p, bleed_axis, rng, wrap=True, halo=None):
     """Counts within `radii`; with bleed, the planes adjacent along `bleed_axis` are
-    added in for each cell independently with probability bleed_p."""
-    inner = box_sum(field, radii, wrap=wrap)
+    added in for each cell independently with probability bleed_p.  With `halo`, the
+    field is padded by a boundary that deep on each axis, and the counts are of the
+    cells inside the padding."""
+    if halo is None:
+        inner = box_sum(field, radii, wrap=wrap)
+    else:
+        inside = interior(field, halo)
+        inner = box_sum(field, radii, wrap=False)[inside]
     if bleed_p is None:
         return inner
     thicker = list(radii)
     thicker[bleed_axis] += 1
-    adjacent = box_sum(field, thicker, wrap=wrap) - inner
-    return inner + adjacent * (rng.random(field.shape) < bleed_p)
+    adjacent = (box_sum(field, thicker, wrap=wrap) if halo is None
+                else box_sum(field, thicker, wrap=False)[inside]) - inner
+    return inner + adjacent * (rng.random(inner.shape) < bleed_p)
 
 
 def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, block=3,
                       p0=0.003, steps=400, target=0.99, seed=1,
                       bleed=None, bleed_axis=0, saturate=None, freeze_times=False,
                       freeze_radius=None, block_radius=None,
-                      start=None, mask=None, obstacles=None, wrap=True):
+                      start=None, mask=None, obstacles=None, wrap=True, boundary=None):
     """Run the deposition CA; returns (states uint8 (n, n, n), steps_run, stop_reason),
     and with freeze_times=True a fourth value: the step at which each cell froze
     (int32 (n, n, n), -1 where it never did, obstacles included).
@@ -88,6 +100,8 @@ def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, bloc
     obstacles     bool (n, n, n): solid from step 0; they block like any solid, but
                   have no freeze time
     wrap          False: the cube's edges count as empty instead of wrapping around
+    boundary      None (`wrap` decides), or the states beyond the faces (boundaries.py)
+                  at each step: Constant(1) a live wall, Constant(FROZEN) a frozen one
     """
     rng = np.random.default_rng(seed)
 
@@ -98,6 +112,10 @@ def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, bloc
     freeze_radii = radii if freeze_radius is None else as_radii(freeze_radius)
     block_radii = radii if block_radius is None else as_radii(block_radius)
     p_alive, p_frozen = bleed if bleed is not None else (None, None)
+    halo = None
+    if boundary is not None:
+        halo = [max(rs) for rs in zip(radii, freeze_radii, block_radii)]
+        halo[bleed_axis] += bleed is not None
     st = np.zeros((n, n, n), np.uint8)
     if start is None:
         lit = rng.random(st.shape) < p0
@@ -116,10 +134,12 @@ def frozen_deposition(n=96, radius=3, n_states=5, birth=(8, 18), freeze=10, bloc
             lit = schedule[t] & (st == 0)
             st[lit if mask is None else lit & mask] = 1
         alive, frozen = st == 1, st == FROZEN
-        n_alive = _neighbour_counts(alive, radii, p_alive, bleed_axis, rng, wrap) - alive
+        seen = st if halo is None else pad(st, boundary, halo, t=t)
+        alive_seen, frozen_seen = (alive, frozen) if halo is None else (seen == 1, seen == FROZEN)
+        n_alive = _neighbour_counts(alive_seen, radii, p_alive, bleed_axis, rng, wrap, halo) - alive
         n_freeze = (n_alive if freeze_radii == radii
-                    else _neighbour_counts(alive, freeze_radii, p_alive, bleed_axis, rng, wrap) - alive)
-        n_frozen = _neighbour_counts(frozen, block_radii, p_frozen, bleed_axis, rng, wrap)
+                    else _neighbour_counts(alive_seen, freeze_radii, p_alive, bleed_axis, rng, wrap, halo) - alive)
+        n_frozen = _neighbour_counts(frozen_seen, block_radii, p_frozen, bleed_axis, rng, wrap, halo)
         new = st.copy()
         ageing = (st >= 1) & (st <= n_states - 1)
         new[ageing] = st[ageing] + 1

@@ -19,6 +19,8 @@ of CA is named after it.
   deposition_shells  frozen deposition chosen and coloured by freeze time (Pick), the
                      shell searches and the configurations picked, and shapes for
                      structured starts
+  boundary_driven    the rulesets from an empty start, with only a boundary to grow
+                     from: boundary designs, adapters per ruleset, depth measures
   saved              a catalogue of rules and configurations worth keeping
   experiments        named, re-runnable experiments, each asking one question
   scenes             named, ready-to-render recipes for every construction (and saved

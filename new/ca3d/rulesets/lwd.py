@@ -34,11 +34,12 @@ def birth_times(init, boundary='wrap', max_steps=5000, stop_at_edge=False):
     nothing ever dies, so it stays a permanent hole.  With stop_at_edge the run halts
     once growth reaches the grid border (for small seeds on a dead boundary).
     `still_growing` is True when the run stopped early rather than at fixation.
+    `boundary` is any form boundaries.py accepts, read at each step.
     """
     g = np.asarray(init, bool).copy()
     birth = np.where(g, 0, -1).astype(np.int32)
     for t in range(1, max_steps):
-        born = ~g & (life.neighbour_count(g, boundary) == 3)
+        born = ~g & (life.neighbour_count(g, boundary, t) == 3)
         if not born.any():
             return birth, t - 1, False
         birth[born] = t
@@ -119,6 +120,8 @@ def hybrid_spacetime(n=128, schedule=None, seeds=None, boundary='dead'):
     seeds: [(row, col, start_step), ...]; each plants THREE_CELL_SEED at that step.
     Fronts launched at different places and times collide, which one seed never does.
 
+    `boundary` is any form boundaries.py accepts, read at each step.
+
     Returns (volume bool [y, x, t], burst_age float [y, x, t]) where burst_age is how
     many steps into the current LWD burst the cell was born, divided by the length of
     the repeating LWD bursts and clipped to [0, 1] (0 for cells older than the burst).
@@ -140,7 +143,7 @@ def hybrid_spacetime(n=128, schedule=None, seeds=None, boundary='dead'):
         vol[:, :, t] = g
         age[:, :, t] = np.where(g, np.maximum(born_at, 0) / burst_len, 0)
         table = life.LIFE_WITHOUT_DEATH if phase == 'L' else life.LIFE
-        new = life.step_totalistic(g, table, boundary).astype(bool)
+        new = life.step_totalistic(g, table, boundary, t).astype(bool)
         if phase == 'L':
             born_at = np.where(new & ~g, k, born_at)
             k += 1

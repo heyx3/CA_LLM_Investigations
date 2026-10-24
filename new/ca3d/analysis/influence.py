@@ -72,7 +72,7 @@ def pattern_traffic(ca, steps, layer=0):
     counts = np.zeros(n_ctx * P, np.int64)
     for _ in range(steps):
         if ca.layers[layer].fires(ca.t):
-            code = ca.context(layer) * P + ca.nb.encode(ca.states[layer])
+            code = ca.context(layer) * P + ca.nb.encode(ca.states[layer], ca.boundaries[layer], ca.t)
             counts += np.bincount(code.ravel(), minlength=n_ctx * P)
         ca.step()
     return counts.reshape(n_ctx, P)

@@ -49,6 +49,8 @@ knowledge of any analysis.
 | `hierarchy.py` | **the** hierarchical CA engine: 1D/2D lattices, all-parents or chain wiring, per-context rule banks, staggered schedules, rule rotation policies |
 | `initial.py` | initial conditions: blobs, uniform, sparse points, rings, gradient, quadrants, half plane |
 | `lattice.py` | operations on lattices of any dimension: box sums |
+| `boundaries.py` | boundary conditions every engine accepts (default: wrap): per axis Wrap or Mirror, per face Constant or Pattern (stripes, checker, dots, noise, gradient, picture, another CA's run as frames), changing with the step if wanted |
+| `extensions.py` | concentric shells: a core cube grown by one CA, then each shell around it by another with the inside frozen; layers built from independent pieces (rule, start, boundary, run) |
 | `double_spacetime.py` | 1D CA extruded to 3D with per-slab rules; the row/column siblings; lambda terrain; slab axis up by default (`up=` stands another axis up) |
 | `triplanar.py` | three 1D sheets combined on orthogonal planes by an 8-bit truth table, which may change with height |
 | `octaves.py` | octave blending of any volume builders, one per level if wanted: linear, nearest or soft upsampling, explicit weights, a tie-breaking threshold, and hooks on each octave's enlarged field and on the weighted sum |
@@ -102,6 +104,9 @@ into `out/double_spacetime/`, `out/triplanar/` and `out/octaves/`.
 `search_deposition_shells.py` runs the deposition shell searches (separate nested
 cages, or shells filling the cube), draws their sheets into `out/deposition_shells/`,
 and prints the samples you name as entries for `deposition_shells.PICKS`.
+`extend_shells.py` draws random extensions (core plus shells) into `out/extensions/`;
+`survey_boundaries.py` runs the rulesets from an empty start under each boundary
+design (`boundary_driven`) into `out/boundary_driven/`.
 
 ### The hierarchical CA in one paragraph
 

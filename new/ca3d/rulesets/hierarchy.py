@@ -39,6 +39,11 @@ another step.
 
 Run records ("space-time volumes") have shape (rows, cols, steps): time is the last
 axis, and frame t is the state before step t.
+
+Boundaries.  Each layer's lattice wraps around (a torus) unless the CA is given another
+boundary (boundaries.py): one for every layer, or a list with one per layer, finest
+first.  A boundary describes faces by fractions of the face, so one boundary means the
+same on every layer's lattice, whatever its size.  It is read at the step t.
 """
 from dataclasses import dataclass, field
 from typing import Callable
@@ -58,7 +63,7 @@ class Neighbourhood:
     name: str
     ndim: int                       # lattice dimension
     n_patterns: int                 # rule table length per context
-    encode: Callable                # lattice -> pattern index of every cell
+    encode: Callable                # (lattice, boundary='wrap', t=0) -> pattern index of every cell
     rotate: Callable | None = None  # (rules, quarter_turns) -> rules for a rotated lattice
 
 
@@ -67,7 +72,7 @@ NEIGHBOURHOODS = {
     # outer-totalistic rules are isotropic, so rotation is the identity
     'totalistic': Neighbourhood('totalistic', 2, 18, life.totalistic_code,
                                 lambda rules, k: rules),
-    'line': Neighbourhood('line', 1, 8, lambda s: wolfram.window_code(s, 1)),
+    'line': Neighbourhood('line', 1, 8, lambda s, boundary='wrap', t=0: wolfram.window_code(s, 1, boundary, t)),
 }
 
 
@@ -120,6 +125,8 @@ class HierarchicalCA:
     neighbourhood 'moore' (2D, 512 patterns), 'totalistic' (2D, 18) or 'line' (1D, 8)
     wiring        'all' or 'chain'
     rotation      optional RotationPolicy
+    boundary      what lies beyond each lattice's edges (boundaries.py): one for every
+                  layer, or a list with one per layer, finest first; default a torus
 
         ca = HierarchicalCA(make_layers(banks, pow2_scales(4)), states)
         record = ca.run(160)          # Spacetime; record.fine is the volume to render
@@ -127,9 +134,10 @@ class HierarchicalCA:
     `step` advances one step in place; `run` steps repeatedly and records the result.
     """
 
-    def __init__(self, layers, states, neighbourhood='moore', wiring='all', rotation=None):
+    def __init__(self, layers, states, neighbourhood='moore', wiring='all', rotation=None, boundary='wrap'):
         self.nb = NEIGHBOURHOODS[neighbourhood] if isinstance(neighbourhood, str) else neighbourhood
         self.layers = list(layers)
+        self.boundaries = list(boundary) if isinstance(boundary, list) else [boundary] * len(self.layers)
         self.states = [np.asarray(s, np.uint8).copy() for s in states]
         self.wiring = wiring
         self.parents = [self._parents_of(i) for i in range(len(self.layers))]
@@ -155,6 +163,8 @@ class HierarchicalCA:
     def _validate(self):
         if len(self.states) != len(self.layers):
             raise ValueError('need one initial state per layer')
+        if len(self.boundaries) != len(self.layers):
+            raise ValueError('need one boundary, or one per layer')
         n = self.states[0].shape[0]
         for i, (layer, s) in enumerate(zip(self.layers, self.states)):
             if n % layer.scale:
@@ -198,7 +208,7 @@ class HierarchicalCA:
         for i, layer in enumerate(self.layers):
             if not layer.fires(self.t):
                 continue
-            new[i] = self._rules[i][self.context(i), self.nb.encode(self.states[i])]
+            new[i] = self._rules[i][self.context(i), self.nb.encode(self.states[i], self.boundaries[i], self.t)]
             self.fired.append(i)
             self.updates[i] += 1
         self.states = new

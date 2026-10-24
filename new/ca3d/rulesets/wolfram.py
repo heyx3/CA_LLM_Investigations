@@ -1,6 +1,8 @@
 """One-dimensional binary ("Wolfram") cellular automata of any radius.
 
-A radius-r rule reads a window of k = 2r+1 cells on a ring (the edges wrap around).
+A radius-r rule reads a window of k = 2r+1 cells on a ring (the edges wrap around,
+unless another boundary is given: see boundaries.py; a 1D lattice's faces are its two
+end cells, so a boundary there is a pair of values over time).
 The window is read as a binary number with the leftmost cell as the most significant
 bit, so a rule table has 2**k entries (8 for elementary rules, 32 for k=5, 128 for
 k=7).  For example, with radius 1 the window (left, centre, right) = (1, 1, 0) has
@@ -35,6 +37,7 @@ from functools import lru_cache
 
 import numpy as np
 
+from .boundaries import is_wrap, pad
 from .rules import apply_table
 
 FORMATS = ('table', 'totalistic', 'outer', 'symmetric')
@@ -128,21 +131,29 @@ def rule_number(table, bit_order='lsb'):
     return sum(int(b) << i for i, b in enumerate(bits))
 
 
-def window_code(state, radius=1):
-    """Window value of every cell (periodic boundary), along the last axis."""
-    code = np.zeros(state.shape, np.int64)
+def window_code(state, radius=1, boundary='wrap', t=0):
+    """Window value of every cell along the last axis; periodic boundary unless
+    another is given (boundaries.py, at step t)."""
+    code = np.zeros(np.shape(state), np.int64)
+    if is_wrap(boundary, 1):
+        for offset in range(-radius, radius + 1):
+            code = (code << 1) | np.roll(state, -offset, axis=-1)   # cell i+offset
+        return code
+    n = np.shape(state)[-1]
+    p = pad(state, boundary, radius, ndim=1, t=t)
     for offset in range(-radius, radius + 1):
-        code = (code << 1) | np.roll(state, -offset, axis=-1)   # cell i+offset
+        code = (code << 1) | p[..., radius + offset:radius + offset + n]
     return code
 
 
-def step(state, table, radius=1):
+def step(state, table, radius=1, boundary='wrap', t=0):
     """One update.  `state` may be a batch (B, n) with one table per row (B, P)."""
-    return apply_table(table, window_code(state, radius)).astype(np.uint8, copy=False)
+    return apply_table(table, window_code(state, radius, boundary, t)).astype(np.uint8, copy=False)
 
 
-def spacetime(init, table, radius=1, steps=None):
+def spacetime(init, table, radius=1, steps=None, boundary='wrap'):
     """Space-time diagram, shape (steps, n): row 0 is `init`, row t is time t.
+    `boundary` (boundaries.py) is read at each step's t.
 
     Batched form: init (B, n) with tables (B, P) gives (B, steps, n).
     """
@@ -151,7 +162,7 @@ def spacetime(init, table, radius=1, steps=None):
     out = np.empty(state.shape[:-1] + (steps, state.shape[-1]), np.uint8)
     for t in range(steps):
         out[..., t, :] = state
-        state = step(state, table, radius)
+        state = step(state, table, radius, boundary, t)
     return out
 
 

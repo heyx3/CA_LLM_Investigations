@@ -1,8 +1,9 @@
 """Two-dimensional binary CA on a square lattice with the 3x3 Moore neighbourhood.
 
 The Moore neighbourhood of a cell is the 3x3 block around it: the cell itself plus its
-8 neighbours (sides and diagonals).  Edges wrap around (a torus) unless a function
-says otherwise.  Two rule representations are used:
+8 neighbours (sides and diagonals).  Edges wrap around (a torus) unless another
+boundary is given (any form boundaries.py accepts: 'wrap', 'dead', Edges(...), with
+the step t for boundaries that change).  Two rule representations are used:
 
 * Outer-totalistic ("life-like"), written in B/S notation.  The new state depends only
   on the cell's own state and on how many of its 8 neighbours are alive.  "B3/S23"
@@ -28,6 +29,7 @@ import re
 
 import numpy as np
 
+from .boundaries import is_wrap, pad
 from .lattice import box_sum
 from .rules import apply_table, from_hex, to_hex
 
@@ -53,28 +55,28 @@ def shifted(s, dy, dx):
     return np.roll(s, (-dy, -dx), axis=(-2, -1))
 
 
-def neighbour_count(s, boundary='wrap'):
+def neighbour_count(s, boundary='wrap', t=0):
     """Live Moore neighbours of every cell (0..8).
 
-    boundary 'wrap' is a torus; 'dead' treats everything outside the grid as dead.
+    boundary 'wrap' is a torus; 'dead' treats everything outside the grid as dead; any
+    other boundary (boundaries.py) supplies the cells beyond the edges at step t.
     """
     s = np.asarray(s, np.uint8)
-    if boundary == 'wrap':        # the 3x3 box sum (four rolls) minus the cell itself
+    if is_wrap(boundary, 2):      # the 3x3 box sum (four rolls) minus the cell itself
         return box_sum(s, (0,) * (s.ndim - 2) + (1, 1), dtype=np.uint8) - s
-    if boundary != 'dead':
-        raise ValueError(f"boundary must be 'wrap' or 'dead', not {boundary!r}")
     h, w = s.shape[-2:]
-    p = np.pad(s, [(0, 0)] * (s.ndim - 2) + [(1, 1), (1, 1)])
+    p = pad(s, boundary, 1, ndim=2, t=t)
     return sum(p[..., 1 + dy:1 + dy + h, 1 + dx:1 + dx + w] for dy, dx in NEIGHBOUR_OFFSETS)
 
 
-def totalistic_code(s, boundary='wrap'):
+def totalistic_code(s, boundary='wrap', t=0):
     """Index into an 18-entry outer-totalistic table: own * 9 + live-neighbour count."""
-    return np.asarray(s, np.uint8) * np.uint8(9) + neighbour_count(s, boundary)
+    return np.asarray(s, np.uint8) * np.uint8(9) + neighbour_count(s, boundary, t)
 
 
-def moore_code(s):
-    """Index into a 512-entry table: own * 256 + neighbour byte (periodic boundary).
+def moore_code(s, boundary='wrap', t=0):
+    """Index into a 512-entry table: own * 256 + neighbour byte (periodic boundary
+    unless another is given).
 
     The neighbour byte follows the bit layout drawn above NEIGHBOUR_OFFSETS.  It is
     built a row at a time: for every row, `triple` packs the cells to the left, centre
@@ -90,7 +92,10 @@ def moore_code(s):
     # few as possible: one wrapped copy of the lattice, the byte built in uint8 and
     # widened once at the end.
     s = np.asarray(s, np.uint8)
-    p = np.pad(s, [(0, 0)] * (s.ndim - 2) + [(1, 1), (1, 1)], mode='wrap')
+    if is_wrap(boundary, 2):
+        p = np.pad(s, [(0, 0)] * (s.ndim - 2) + [(1, 1), (1, 1)], mode='wrap')
+    else:
+        p = pad(s, boundary, 1, ndim=2, t=t)
     right, middle, left = p[..., 2:], p[..., 1:-1], p[..., :-2]      # columns x + 1, x, x - 1
     triple = right | (middle << 1)
     triple |= left << 2
@@ -192,23 +197,24 @@ def parse_bank(text):
 
 # ---------------------------------------------------------------- stepping
 
-def step_totalistic(s, table18, boundary='wrap'):
+def step_totalistic(s, table18, boundary='wrap', t=0):
     """One update of a 2D lattice (or stack of lattices) under an 18-entry B/S table."""
-    return apply_table(table18, totalistic_code(s, boundary)).astype(np.uint8, copy=False)
+    return apply_table(table18, totalistic_code(s, boundary, t)).astype(np.uint8, copy=False)
 
 
-def step_moore(s, table512):
-    """One update under a 512-entry table (periodic boundary)."""
-    return apply_table(table512, moore_code(s)).astype(np.uint8, copy=False)
+def step_moore(s, table512, boundary='wrap', t=0):
+    """One update under a 512-entry table (periodic boundary unless another is given)."""
+    return apply_table(table512, moore_code(s, boundary, t)).astype(np.uint8, copy=False)
 
 
-def step_rule(s, table):
-    """Step with an 18- or 512-entry table (chosen by its length), periodic boundary."""
+def step_rule(s, table, boundary='wrap', t=0):
+    """Step with an 18- or 512-entry table (chosen by its length); periodic boundary
+    unless another is given."""
     size = np.shape(table)[-1]
     if size == 18:
-        return step_totalistic(s, table)
+        return step_totalistic(s, table, boundary, t)
     if size == 512:
-        return step_moore(s, table)
+        return step_moore(s, table, boundary, t)
     raise ValueError(f'expected an 18- or 512-entry table, got {size}')
 
 

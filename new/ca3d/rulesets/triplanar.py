@@ -28,17 +28,21 @@ EXACT1 = 0x16                   # exactly one
 OR3 = 0xfe                      # any
 
 
-def sheet(rule, radius=2, n=96, init='cell', seed=0, bit_order='lsb', format='table'):
+def sheet(rule, radius=2, n=96, init='cell', seed=0, bit_order='lsb', format='table', boundary='wrap'):
     """One n x n space-time diagram (time, space) of a 1D rule (in any wolfram format),
-    from one live cell in the middle ('cell') or a random soup ('soup', drawn with seed)."""
+    from one live cell in the middle ('cell'), a random soup ('soup', drawn with seed)
+    or nothing ('empty'), the line's ends given by `boundary` (boundaries.py; default
+    a ring)."""
     table = wolfram.expand(wolfram.rule_table(rule, radius, bit_order, format), format, radius)
     if init == 'cell':
         start = wolfram.single_cell(n)
     elif init == 'soup':
         start = wolfram.random_state(n, np.random.default_rng(seed))
+    elif init == 'empty':
+        start = np.zeros(n, np.uint8)
     else:
-        raise ValueError(f"init must be 'cell' or 'soup', not {init!r}")
-    return wolfram.spacetime(start, table, radius, n)
+        raise ValueError(f"init must be 'cell', 'soup' or 'empty', not {init!r}")
+    return wolfram.spacetime(start, table, radius, n, boundary)
 
 
 def shear(sheet_, amount):
@@ -70,8 +74,9 @@ def combine(a, b, c, how=MAJ, shear_amount=0):
     return out
 
 
-def triplanar(rules=DEFAULT_RULES, radius=2, n=96, how=MAJ, shear_amount=0, init='cell'):
+def triplanar(rules=DEFAULT_RULES, radius=2, n=96, how=MAJ, shear_amount=0, init='cell', boundary='wrap'):
     """The whole construction: one sheet per rule in `rules` (soups drawn with seeds 0, 1,
-    2), combined by `how` (see combine).  Returns bool (n, n, n) indexed [x, y, z]."""
-    sheets = [sheet(r, radius, n, init=init, seed=i) for i, r in enumerate(rules)]
+    2; every sheet under `boundary`), combined by `how` (see combine).  Returns bool
+    (n, n, n) indexed [x, y, z]."""
+    sheets = [sheet(r, radius, n, init=init, seed=i, boundary=boundary) for i, r in enumerate(rules)]
     return combine(*sheets, how=how, shear_amount=shear_amount)

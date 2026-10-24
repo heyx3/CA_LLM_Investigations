@@ -5,6 +5,8 @@
 """
 import numpy as np
 
+from .boundaries import interior, is_wrap, pad as pad_boundary
+
 
 def time_last(frames):
     """A (T, ...) stack of frames as a contiguous (..., T) array.
@@ -19,16 +21,23 @@ def time_last(frames):
     return np.ascontiguousarray(np.moveaxis(frames, 0, -1))
 
 
-def box_sum(V, radii, wrap=True, dtype=np.int32):
+def box_sum(V, radii, wrap=True, dtype=np.int32, boundary=None, t=0):
     """Sum of V over the box [-r, r] on each axis around every cell (self included).
 
     `radii` is one radius for every axis or one per axis (0 leaves an axis out, e.g. a
-    batch axis).  Edges wrap periodically, or with wrap=False count as empty.  Radius 1
-    uses rolls, the rest separable running sums.  `dtype` is the type summed in: a
-    small one (np.uint8) is several times faster on big batches, and safe as long as
-    no box sum can exceed its range."""
+    batch axis).  Edges wrap periodically, or with wrap=False count as empty.  A
+    `boundary` (boundaries.py; its axes are all of V's axes, t its step) replaces
+    `wrap`: V is padded by the radii and summed inside.  Radius 1 uses rolls, the
+    rest separable running sums.  `dtype` is the type summed in: a small one
+    (np.uint8) is several times faster on big batches, and safe as long as no box sum
+    can exceed its range."""
+    radii = (radii,) * np.ndim(V) if np.isscalar(radii) else tuple(radii)
+    if boundary is not None:
+        if not is_wrap(boundary, np.ndim(V)):
+            padded = pad_boundary(V, boundary, radii, t=t)
+            return box_sum(padded, radii, wrap=False, dtype=dtype)[interior(padded, radii)]
+        wrap = True
     out = np.asarray(V, dtype)
-    radii = (radii,) * out.ndim if np.isscalar(radii) else tuple(radii)
     for axis, r in enumerate(radii):
         if r == 0:
             continue

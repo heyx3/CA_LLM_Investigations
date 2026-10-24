@@ -5,7 +5,8 @@ to it, which gives branching, dendritic shapes.  Here the particles are a lattic
 each cell has six boolean channels, one per face direction (+x, -x, +y, -y, +z, -z),
 and a particle in channel c moves one cell in direction c every step.  Each step:
 
-1. stream     every particle moves one cell along its channel (periodic)
+1. stream     every particle moves one cell along its channel (through the
+              boundary: periodic by default)
 2. bounce     particles that moved into solid reverse direction
 3. collide    cells holding 2+ particles have their channels shuffled by a random
               permutation of the six channels, which scrambles the particles'
@@ -16,17 +17,34 @@ and a particle in channel c moves one cell in direction c every step.  Each step
 The directional channels matter: the ablation `directional=False` replaces them with
 a scalar concentration under isotropic diffusion, which averages the field below the
 deposition threshold beside the aggregate, so nothing grows.
+
+Boundaries (boundaries.py) say what streams in across the faces.  A face value is put
+in every channel beyond it, so Constant(0) absorbs the particles that leave and lets
+none in, and a Pattern (Noise, say) injects one particle per step, in the inward
+channel, wherever it is true.  Mirror copies the cells beyond the edge but not their
+directions, so it is not a reflecting wall.
 """
 import numpy as np
 from scipy import ndimage
+
+from .boundaries import is_wrap, pad
 
 DIRECTIONS = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
 OPPOSITE = [1, 0, 3, 2, 5, 4]
 
 
-def stream(channels):
+def shifted(f, d, boundary='wrap', t=0):
+    """f moved one cell along direction d: out[x] = f[x - d], the cells entering from
+    beyond the edge supplied by `boundary` (boundaries.py) at step t."""
+    if is_wrap(boundary, f.ndim):
+        return np.roll(f, d, axis=tuple(range(f.ndim)))
+    p = pad(f, boundary, 1, t=t)
+    return p[tuple(slice(1 - di, 1 - di + n) for di, n in zip(d, f.shape))]
+
+
+def stream(channels, boundary='wrap', t=0):
     """Step 1: shift each channel's particles one cell along its own direction."""
-    return [np.roll(f, d, axis=(0, 1, 2)) for f, d in zip(channels, DIRECTIONS)]
+    return [shifted(f, d, boundary, t) for f, d in zip(channels, DIRECTIONS)]
 
 
 def bounce_back(channels, solid):
@@ -47,12 +65,13 @@ def collide(channels, solid, rng):
 
 
 def lattice_gas_dla(n=80, steps=900, fill=0.02, stick=1.0, target=0.04, seed=1,
-                    seed_mode='point', directional=True, bias_channel=None, bias=3.0):
+                    seed_mode='point', directional=True, bias_channel=None, bias=3.0, boundary='wrap'):
     """Grow an aggregate; returns (solid bool (n, n, n), steps_run, stop_reason).
 
-    fill          initial particle probability per channel per cell
+    fill          initial particle probability per channel per cell (0: an empty start)
     seed_mode     'point' (single solid voxel in the middle) or 'floor' (z = 0 plane)
     bias_channel  optionally start `bias` x more particles in one channel
+    boundary      what streams in across the faces (see the module docstring)
     """
     rng = np.random.default_rng(seed)
     shape = (n, n, n)
@@ -71,11 +90,11 @@ def lattice_gas_dla(n=80, steps=900, fill=0.02, stick=1.0, target=0.04, seed=1,
 
     for t in range(steps):
         if directional:
-            channels = collide(bounce_back(stream(channels), solid), solid, rng)
+            channels = collide(bounce_back(stream(channels, boundary, t), solid), solid, rng)
             occupancy = sum(f.astype(np.int8) for f in channels)
         else:
             concentration = np.where(solid, 0, sum(
-                np.roll(concentration, d, axis=(0, 1, 2)) for d in DIRECTIONS) / 6.0)
+                shifted(concentration, d, boundary, t) for d in DIRECTIONS) / 6.0)
             occupancy = concentration
         frontier = ndimage.binary_dilation(solid) & ~solid
         grow = frontier & (occupancy >= 1) & (rng.random(shape) < stick)
